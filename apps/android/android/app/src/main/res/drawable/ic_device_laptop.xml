@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Screen frame and inner display cutout -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M4,4 C2.9,4 2,4.9 2,6 L2,15 C2,15.55 2.45,16 3,16 L21,16 C21.55,16 22,15.55 22,15 L22,6 C22,4.9 21.1,4 20,4 L4,4 Z M4.2,6.2 L19.8,6.2 L19.8,13.8 L4.2,13.8 Z" />
+    <!-- Bottom laptop base & keyboard shelf -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M0.8,17 C0.8,18.1 1.7,19 2.8,19 L21.2,19 C22.3,19 23.2,18.1 23.2,17 C23.2,16.4 22.7,16 22,16 L2,16 C1.3,16 0.8,16.4 0.8,17 Z" />
+</vector>

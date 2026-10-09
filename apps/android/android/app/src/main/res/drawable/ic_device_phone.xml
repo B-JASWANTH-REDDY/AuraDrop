@@ -1,0 +1,15 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Smartphone chassis and bezel cutout -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M7,2 C5.9,2 5,2.9 5,4 L5,20 C5,21.1 5.9,22 7,22 L17,22 C18.1,22 19,21.1 19,20 L19,4 C19,2.9 18.1,2 17,2 L7,2 Z M7,4.5 L17,4.5 L17,18.5 L7,18.5 Z" />
+    <!-- Bottom home indicator bar -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.5,20 C10.2,20 10,20.2 10,20.5 C10,20.8 10.2,21 10.5,21 L13.5,21 C13.8,21 14,20.8 14,20.5 C14,20.2 13.8,20 13.5,20 Z" />
+</vector>

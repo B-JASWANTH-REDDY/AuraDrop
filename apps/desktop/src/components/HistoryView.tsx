@@ -25,23 +25,23 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none animate-fade-in">
-      <div className="w-full max-w-lg bg-[#0E0E12] border border-white/20 rounded-2xl shadow-2xl p-6 relative flex flex-col max-h-[80vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none animate-fade-in">
+      <div className="w-full max-w-lg bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-6 relative flex flex-col max-h-[80vh]">
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
+          className="absolute top-4 right-4 p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-white/10 transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
 
         <div className="flex items-center justify-between mb-5 pr-8">
           <div>
-            <h3 className="text-base font-bold text-white">Transfer History</h3>
+            <h3 className="text-base font-bold text-white tracking-tight">Transfer History</h3>
             <p className="text-xs text-neutral-400">Click any transferred file to open it directly</p>
           </div>
           <button
             onClick={onOpenFolder}
-            className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-all"
+            className="px-3.5 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center gap-1.5 transition-all border border-white/15"
           >
             <FolderOpen className="w-4 h-4" />
             Downloads
@@ -59,7 +59,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 key={`${item.transferId}-${idx}`}
                 onClick={() => onOpenFile && onOpenFile(item.filePath || item.fileName)}
                 title="Click to open file"
-                className="flex items-center gap-3 p-3 rounded-xl bg-black border border-white/10 hover:border-white/40 hover:bg-white/5 transition-all cursor-pointer group"
+                className="flex items-center gap-3 p-3.5 rounded-2xl bg-white/[0.04] border border-white/10 hover:border-white/30 hover:bg-white/[0.08] transition-all cursor-pointer group backdrop-blur-md"
               >
                 <div
                   className={`p-2 rounded-lg ${

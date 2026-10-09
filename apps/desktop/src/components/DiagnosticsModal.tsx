@@ -18,8 +18,8 @@ export const DiagnosticsModal: React.FC<DiagnosticsModalProps> = ({
   if (!info) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md select-none">
-      <div className="w-full max-w-md bg-[#0E0E12] border border-white/20 rounded-2xl shadow-2xl p-6 relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none">
+      <div className="w-full max-w-md bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-6 relative">
         <button
           onClick={onDismiss}
           className="absolute top-4 right-4 p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"

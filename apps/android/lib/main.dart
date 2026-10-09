@@ -555,6 +555,21 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         }
         break;
 
+      case 'openChatWithPeer':
+        final pId = event['peerId']?.toString();
+        if (pId != null && _peers.containsKey(pId)) {
+          final targetPeer = _peers[pId]!;
+          setState(() {
+            _selectedPeer = targetPeer;
+            _currentTabIndex = 0;
+          });
+          Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => ChatScreen(peer: targetPeer)),
+          );
+        }
+        break;
+
       case 'peerDiscovered':
         final peerData = event['peer'];
         if (peerData is Map) {
@@ -575,6 +590,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
               deviceName: peer.deviceName,
               platform: peer.platform,
               ip: peer.ip,
+              avatarPath: peer.avatarPath,
             );
             InAppNotificationController().showNameDrop(
               peerName: peer.name,

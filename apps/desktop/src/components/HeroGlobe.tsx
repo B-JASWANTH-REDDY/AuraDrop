@@ -322,7 +322,7 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         ctx.font = isSelected ? '700 11px Inter, sans-serif' : '600 10px Inter, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
-        const displayLabel = isAndroid ? `📱 ${peer.name}` : peer.name;
+        const displayLabel = peer.name;
         ctx.fillText(displayLabel, px, py + 19);
       }
     });

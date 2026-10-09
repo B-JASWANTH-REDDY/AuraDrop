@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -21,6 +22,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.animation.OvershootInterpolator
 import android.widget.ImageView
+import android.widget.ProgressBar
 import android.widget.TextView
 import java.io.File
 
@@ -42,6 +44,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var currentOverlayView: View? = null
     private var autoDismissRunnable: Runnable? = null
+    private var activeTransferId: String? = null
 
     fun canDrawOverlays(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -66,13 +69,28 @@ class AuraOverlayManager private constructor(private val context: Context) {
         }
     }
 
+    private fun wakeScreenBriefly() {
+        try {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val wakeLock = pm?.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP,
+                "auradrop:proximity_wakelock"
+            )
+            wakeLock?.acquire(4000L)
+        } catch (e: Exception) {
+            Log.w(TAG, "WakeLock error: ${e.message}")
+        }
+    }
+
     fun showNameDropOverlay(
         peerId: String = "",
         peerName: String,
         deviceName: String = "",
         platform: String = "device",
         ip: String = "",
-        onShare: (() -> Unit)? = null
+        avatarPath: String = "",
+        onShare: (() -> Unit)? = null,
+        onChat: (() -> Unit)? = null
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
@@ -81,6 +99,8 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 return@post
             }
 
+            wakeScreenBriefly()
+
             try {
                 val inflater = LayoutInflater.from(context)
                 val view = inflater.inflate(R.layout.view_floating_dynamic_island, null)
@@ -88,24 +108,56 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)
                 val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
                 val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
-                val tvDeviceIcon = view.findViewById<TextView>(R.id.tv_device_icon)
+                val ivDeviceIcon = view.findViewById<ImageView>(R.id.iv_device_icon)
+                val ivDeviceAvatar = view.findViewById<ImageView>(R.id.iv_device_avatar)
                 val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
+                val btnChat = view.findViewById<View>(R.id.btn_chat_container)
                 val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
                 val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
+                val tvBtnChat = view.findViewById<TextView>(R.id.tv_btn_chat)
                 val tvBtnAccept = view.findViewById<TextView>(R.id.tv_btn_accept)
                 val pillCard = view.findViewById<View>(R.id.pill_card_container)
+                val progressContainer = view.findViewById<View>(R.id.transfer_progress_container)
 
-                val isWindows = platform.contains("win", ignoreCase = true)
+                progressContainer.visibility = View.GONE
+                btnChat.visibility = View.VISIBLE
+
+                val isWindows = platform.contains("win", ignoreCase = true) || platform.contains("desktop", ignoreCase = true)
                 val platformDisplay = if (isWindows) "Windows PC" else if (platform.contains("android", ignoreCase = true)) "Android Device" else platform.replaceFirstChar { it.uppercase() }
 
                 tvTitle.text = "AuraDrop Nearby"
                 tvSubtitle.text = "$peerName • $platformDisplay"
-                tvStatusBadge.text = if (ip.isNotBlank()) "$ip • LAN 24/7 Proximity" else "Direct Wi-Fi • Ready"
-                tvDeviceIcon.text = if (isWindows) "💻" else "📱"
+                tvStatusBadge.text = if (ip.isNotBlank()) "$ip • 24/7 LAN Proximity" else "Direct Wi-Fi • Ready"
+                
+                // Hardware Vector Icon (Laptop for Windows/Desktop, Smartphone for Android)
+                ivDeviceIcon.setImageResource(if (isWindows) R.drawable.ic_device_laptop else R.drawable.ic_device_phone)
+
+                // Load custom profile avatar if available
+                if (avatarPath.isNotBlank()) {
+                    try {
+                        val file = File(avatarPath)
+                        if (file.exists()) {
+                            val bmp = BitmapFactory.decodeFile(file.absolutePath)
+                            if (bmp != null) {
+                                ivDeviceAvatar.setImageBitmap(bmp)
+                                ivDeviceAvatar.visibility = View.VISIBLE
+                                ivDeviceIcon.visibility = View.GONE
+                            }
+                        }
+                    } catch (e: Exception) {}
+                }
+
                 tvBtnDecline.text = "Dismiss"
+                tvBtnChat.text = "Chat"
                 tvBtnAccept.text = "Share Files"
 
                 btnDecline.setOnClickListener {
+                    dismissCurrentOverlay()
+                }
+
+                btnChat.setOnClickListener {
+                    onChat?.invoke()
+                    launchApp()
                     dismissCurrentOverlay()
                 }
 
@@ -121,7 +173,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
                     dismissCurrentOverlay()
                 }
 
-                addAndAnimateView(view, pillCard, autoDismissDelay = 8000L)
+                addAndAnimateView(view, pillCard, autoDismissDelay = 10000L)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to show NameDrop overlay: ${e.message}")
             }
@@ -144,6 +196,8 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 return@post
             }
 
+            wakeScreenBriefly()
+
             try {
                 val inflater = LayoutInflater.from(context)
                 val view = inflater.inflate(R.layout.view_floating_dynamic_island, null)
@@ -151,13 +205,21 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)
                 val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
                 val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                val ivDeviceIcon = view.findViewById<ImageView>(R.id.iv_device_icon)
                 val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
+                val btnChat = view.findViewById<View>(R.id.btn_chat_container)
                 val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
                 val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
                 val tvBtnAccept = view.findViewById<TextView>(R.id.tv_btn_accept)
                 val ivPreview = view.findViewById<ImageView>(R.id.iv_preview_thumbnail)
                 val previewContainer = view.findViewById<View>(R.id.preview_thumbnail_container)
                 val pillCard = view.findViewById<View>(R.id.pill_card_container)
+                val progressContainer = view.findViewById<View>(R.id.transfer_progress_container)
+
+                progressContainer.visibility = View.GONE
+                btnChat.visibility = View.GONE // For transfer request, only Decline / Accept
+
+                ivDeviceIcon.setImageResource(R.drawable.ic_device_laptop)
 
                 tvTitle.text = "AuraDrop Request"
                 tvSubtitle.text = "$senderName wants to send $fileName"
@@ -188,7 +250,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 btnAccept.setOnClickListener {
                     onAccept()
                     launchApp()
-                    dismissCurrentOverlay()
+                    // Keep overlay alive to show progress
                 }
 
                 pillCard.setOnClickListener {
@@ -199,6 +261,143 @@ class AuraOverlayManager private constructor(private val context: Context) {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to show transfer request overlay: ${e.message}")
             }
+        }
+    }
+
+    fun showOrUpdateTransferProgress(
+        transferId: String,
+        fileName: String,
+        progressPercent: Int,
+        transferredBytes: Long,
+        totalBytes: Long,
+        speedBytesPerSec: Long,
+        isSending: Boolean = false,
+        onCancel: (() -> Unit)? = null
+    ) {
+        mainHandler.post {
+            if (!canDrawOverlays()) return@post
+
+            val view = currentOverlayView
+            if (view != null && activeTransferId == transferId) {
+                // In-place update of ongoing transfer
+                try {
+                    val tvTitle = view.findViewById<TextView>(R.id.tv_title)
+                    val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                    val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                    val pbTransfer = view.findViewById<ProgressBar>(R.id.pb_transfer)
+                    val tvStats = view.findViewById<TextView>(R.id.tv_transfer_stats)
+                    val tvSpeed = view.findViewById<TextView>(R.id.tv_transfer_speed)
+                    val progressContainer = view.findViewById<View>(R.id.transfer_progress_container)
+                    val btnChat = view.findViewById<View>(R.id.btn_chat_container)
+                    val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
+                    val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
+
+                    progressContainer.visibility = View.VISIBLE
+                    btnChat.visibility = View.GONE
+                    btnAccept.visibility = View.GONE
+
+                    tvTitle.text = if (isSending) "Sending via AuraDrop..." else "Receiving via AuraDrop..."
+                    tvSubtitle.text = fileName
+                    tvStatusBadge.text = "⚡ Direct LAN Transfer"
+
+                    pbTransfer.progress = progressPercent.coerceIn(0, 100)
+                    tvStats.text = "${formatBytes(transferredBytes)} / ${formatBytes(totalBytes)} • $progressPercent%"
+                    val speedMb = speedBytesPerSec / (1024.0 * 1024.0)
+                    tvSpeed.text = if (speedMb > 0.05) String.format("⚡ %.1f MB/s", speedMb) else "⚡ Streaming"
+                    tvBtnDecline.text = "Cancel"
+
+                    val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
+                    btnDecline.setOnClickListener {
+                        onCancel?.invoke()
+                        dismissCurrentOverlay()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error updating overlay progress: ${e.message}")
+                }
+            } else {
+                // New transfer progress overlay
+                activeTransferId = transferId
+                dismissCurrentOverlay()
+
+                try {
+                    val inflater = LayoutInflater.from(context)
+                    val newView = inflater.inflate(R.layout.view_floating_dynamic_island, null)
+
+                    val tvTitle = newView.findViewById<TextView>(R.id.tv_title)
+                    val tvSubtitle = newView.findViewById<TextView>(R.id.tv_sender_subtitle)
+                    val tvStatusBadge = newView.findViewById<TextView>(R.id.tv_status_badge)
+                    val ivDeviceIcon = newView.findViewById<ImageView>(R.id.iv_device_icon)
+                    val pbTransfer = newView.findViewById<ProgressBar>(R.id.pb_transfer)
+                    val tvStats = newView.findViewById<TextView>(R.id.tv_transfer_stats)
+                    val tvSpeed = newView.findViewById<TextView>(R.id.tv_transfer_speed)
+                    val progressContainer = newView.findViewById<View>(R.id.transfer_progress_container)
+                    val btnChat = newView.findViewById<View>(R.id.btn_chat_container)
+                    val btnDecline = newView.findViewById<View>(R.id.btn_decline_container)
+                    val btnAccept = newView.findViewById<View>(R.id.btn_accept_container)
+                    val tvBtnDecline = newView.findViewById<TextView>(R.id.tv_btn_decline)
+                    val pillCard = newView.findViewById<View>(R.id.pill_card_container)
+
+                    ivDeviceIcon.setImageResource(R.drawable.ic_device_laptop)
+                    progressContainer.visibility = View.VISIBLE
+                    btnChat.visibility = View.GONE
+                    btnAccept.visibility = View.GONE
+
+                    tvTitle.text = if (isSending) "Sending via AuraDrop..." else "Receiving via AuraDrop..."
+                    tvSubtitle.text = fileName
+                    tvStatusBadge.text = "⚡ Direct LAN Transfer"
+
+                    pbTransfer.progress = progressPercent.coerceIn(0, 100)
+                    tvStats.text = "${formatBytes(transferredBytes)} / ${formatBytes(totalBytes)} • $progressPercent%"
+                    val speedMb = speedBytesPerSec / (1024.0 * 1024.0)
+                    tvSpeed.text = if (speedMb > 0.05) String.format("⚡ %.1f MB/s", speedMb) else "⚡ Streaming"
+                    tvBtnDecline.text = "Cancel"
+
+                    btnDecline.setOnClickListener {
+                        onCancel?.invoke()
+                        dismissCurrentOverlay()
+                    }
+
+                    pillCard.setOnClickListener {
+                        launchApp()
+                    }
+
+                    addAndAnimateView(newView, pillCard, autoDismissDelay = 120000L)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch transfer progress overlay: ${e.message}")
+                }
+            }
+        }
+    }
+
+    fun markTransferComplete(fileName: String, totalBytes: Long) {
+        mainHandler.post {
+            val view = currentOverlayView ?: return@post
+            try {
+                val tvTitle = view.findViewById<TextView>(R.id.tv_title)
+                val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                val pbTransfer = view.findViewById<ProgressBar>(R.id.pb_transfer)
+                val tvStats = view.findViewById<TextView>(R.id.tv_transfer_stats)
+                val tvSpeed = view.findViewById<TextView>(R.id.tv_transfer_speed)
+                val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
+                val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
+
+                tvTitle.text = "Transfer Complete ✓"
+                tvSubtitle.text = fileName
+                tvStatusBadge.text = "${formatBytes(totalBytes)} • SHA-256 Verified"
+                pbTransfer.progress = 100
+                tvStats.text = "100% Completed"
+                tvSpeed.text = "✓ Saved"
+                tvBtnDecline.text = "Done"
+
+                btnDecline.setOnClickListener {
+                    dismissCurrentOverlay()
+                }
+
+                mainHandler.postDelayed({
+                    dismissCurrentOverlay()
+                }, 3500L)
+            } catch (e: Exception) {}
         }
     }
 
@@ -214,13 +413,25 @@ class AuraOverlayManager private constructor(private val context: Context) {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
+        // Full 24/7 overlay visibility flags: Home screen, over any app, and on Lock Screen
+        var windowFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+
+        // Enable display on Lock Screen and turn display on
+        @Suppress("DEPRECATION")
+        run {
+            windowFlags = windowFlags or
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        }
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            windowFlags,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -270,6 +481,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
     }
 
     fun dismissCurrentOverlay() {
+        activeTransferId = null
         autoDismissRunnable?.let { mainHandler.removeCallbacks(it) }
         autoDismissRunnable = null
 

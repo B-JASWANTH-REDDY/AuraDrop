@@ -1,7 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="#000000" />
-    <corners android:radius="38dp" />
-    <stroke android:width="1dp" android:color="#26FFFFFF" />
-</shape>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Deep frosted glass base container -->
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <gradient
+                android:startColor="#F015151B"
+                android:centerColor="#EA101014"
+                android:endColor="#F208080B"
+                android:angle="270" />
+            <stroke
+                android:width="1.2dp"
+                android:color="#38FFFFFF" />
+        </shape>
+    </item>
+    <!-- Specular ambient top glow highlight -->
+    <item
+        android:left="2dp"
+        android:right="2dp"
+        android:top="1dp"
+        android:bottom="8dp">
+        <shape android:shape="rectangle">
+            <corners
+                android:topLeftRadius="27dp"
+                android:topRightRadius="27dp"
+                android:bottomLeftRadius="0dp"
+                android:bottomRightRadius="0dp" />
+            <gradient
+                android:startColor="#2AFFFFFF"
+                android:endColor="#00FFFFFF"
+                android:angle="270" />
+        </shape>
+    </item>
+</layer-list>

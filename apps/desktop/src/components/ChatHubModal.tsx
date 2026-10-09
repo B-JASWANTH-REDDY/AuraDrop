@@ -7,12 +7,11 @@ import {
   Send,
   Paperclip,
   X,
-  Smartphone,
-  Monitor,
   Search,
   Wifi,
   WifiOff,
 } from 'lucide-react';
+import { HardwareLaptopIcon, HardwarePhoneIcon } from './DeviceShelf';
 
 interface ChatHubModalProps {
   peers: PeerDevice[];
@@ -190,10 +189,10 @@ export const ChatHubModal: React.FC<ChatHubModalProps> = ({
   const selectedConversation = conversations.find((c) => c.peerId === selectedPeerId);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md select-none animate-fade-in">
-      <div className="w-full max-w-4xl h-[620px] bg-[#0E0E12] border border-white/20 rounded-2xl shadow-2xl flex relative overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none animate-fade-in">
+      <div className="w-full max-w-4xl h-[620px] bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl flex relative overflow-hidden">
         {/* Left Sidebar: Conversations List */}
-        <div className="w-80 border-r border-white/10 flex flex-col bg-black/50">
+        <div className="w-80 border-r border-white/10 flex flex-col bg-white/[0.02]">
           {/* Header */}
           <div className="p-4 border-b border-white/10 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -243,8 +242,8 @@ export const ChatHubModal: React.FC<ChatHubModalProps> = ({
                     }`}
                   >
                     <div className="relative">
-                      <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white text-xs font-bold">
-                        {isAndroid ? <Smartphone className="w-4 h-4" /> : <Monitor className="w-4 h-4" />}
+                      <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white text-xs font-bold shadow-inner">
+                        {isAndroid ? <HardwarePhoneIcon className="w-4 h-4" /> : <HardwareLaptopIcon className="w-4 h-4" />}
                       </div>
                       <span
                         className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-black ${
@@ -276,17 +275,17 @@ export const ChatHubModal: React.FC<ChatHubModalProps> = ({
         </div>
 
         {/* Right Pane: Selected Conversation Chat */}
-        <div className="flex-1 flex flex-col bg-[#000000]/60">
+        <div className="flex-1 flex flex-col bg-black/40">
           {selectedConversation ? (
             <>
               {/* Chat Header */}
-              <div className="h-16 border-b border-white/10 px-5 flex items-center justify-between bg-black/50">
+              <div className="h-16 border-b border-white/10 px-5 flex items-center justify-between bg-white/[0.03]">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-white/10 border border-white/15 flex items-center justify-center text-white">
+                  <div className="w-10 h-10 rounded-2xl bg-white/10 border border-white/15 flex items-center justify-center text-white shadow-inner">
                     {activePeer?.platform.toLowerCase().includes('android') ? (
-                      <Smartphone className="w-5 h-5" />
+                      <HardwarePhoneIcon className="w-5 h-5" />
                     ) : (
-                      <Monitor className="w-5 h-5" />
+                      <HardwareLaptopIcon className="w-5 h-5" />
                     )}
                   </div>
                   <div>

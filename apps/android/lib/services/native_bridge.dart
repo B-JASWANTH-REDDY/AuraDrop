@@ -247,6 +247,7 @@ class NativeBridgeService {
     String? deviceName,
     String? platform,
     String? ip,
+    String? avatarPath,
   }) async {
     if (!Platform.isAndroid) return;
     try {
@@ -256,6 +257,7 @@ class NativeBridgeService {
         'deviceName': deviceName ?? peerName,
         'platform': platform ?? 'device',
         'ip': ip ?? '',
+        'avatarPath': avatarPath ?? '',
       });
     } catch (_) {}
   }

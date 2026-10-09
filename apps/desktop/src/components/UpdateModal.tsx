@@ -38,8 +38,8 @@ export const UpdateModal: React.FC<UpdateModalProps> = ({ onClose }) => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md select-none animate-fade-in">
-      <div className="w-full max-w-md bg-[#0E0E12] border border-white/20 rounded-2xl shadow-2xl p-6 relative flex flex-col gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none animate-fade-in">
+      <div className="w-full max-w-md bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-6 relative flex flex-col gap-4">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-white/10">
           <div className="flex items-center gap-2.5">

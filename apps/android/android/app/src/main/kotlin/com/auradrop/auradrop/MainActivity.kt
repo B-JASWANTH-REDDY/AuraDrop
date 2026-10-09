@@ -23,6 +23,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -206,6 +207,18 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
         activeInstance = this
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            )
+        }
+
         createSystemNotificationChannels()
         dbHelper = AuraDropDatabaseHelper(this)
 
@@ -590,7 +603,8 @@ class MainActivity : FlutterActivity() {
                     val deviceName = call.argument<String>("deviceName") ?: peerName
                     val platform = call.argument<String>("platform") ?: "device"
                     val ip = call.argument<String>("ip") ?: ""
-                    showSystemNameDropProximityNotification(peerId, peerName, deviceName, platform, ip)
+                    val avatarPath = call.argument<String>("avatarPath") ?: ""
+                    showSystemNameDropProximityNotification(peerId, peerName, deviceName, platform, ip, avatarPath)
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -935,7 +949,8 @@ class MainActivity : FlutterActivity() {
                                     peerName = resolvedName,
                                     deviceName = peer.deviceName,
                                     platform = peer.platform,
-                                    ip = peer.ip
+                                    ip = peer.ip,
+                                    avatarPath = peer.avatarPath
                                 )
                             }
                         }
@@ -1746,7 +1761,7 @@ class MainActivity : FlutterActivity() {
                             "verificationState" to "STREAMING"
                         ))
 
-                        updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed))
+                        updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed), currentFinalFile.name, overallReceived, totalExpectedTransferBytes, movingAvgSpeed, false)
                     }
                 }
 
@@ -1832,7 +1847,7 @@ class MainActivity : FlutterActivity() {
                     ))
 
                     dbHelper.updateIncomingRequestStatus(transferId, "COMPLETED")
-                    notifyForegroundTransferComplete(currentFinalFile.name, currentFinalFile.absolutePath)
+                    notifyForegroundTransferComplete(currentFinalFile.name, currentFinalFile.absolutePath, overallReceived)
 
                     sendEvent("transferCompleted", mapOf(
                         "transferId" to transferId,
@@ -1996,18 +2011,20 @@ class MainActivity : FlutterActivity() {
                                 "etaSeconds" to eta,
                                 "percentage" to pct
                             ))
+
+                            updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, sentBytes, fileSize, speed, true)
                         }
                     }
                     bos.flush()
                 }
             }
 
-            stopForegroundTransferService()
             val uploadStatus = uploadConn.responseCode
             val uploadRespStr = if (uploadStatus in 200..299) uploadConn.inputStream.bufferedReader().readText() else ""
             uploadConn.disconnect()
 
             if (uploadStatus in 200..299) {
+                notifyForegroundTransferComplete(fileName, uriStr, sentBytes)
                 val elapsedTotalSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
                 val avgSpeed = (sentBytes / elapsedTotalSec).toLong()
 
@@ -2281,7 +2298,7 @@ class MainActivity : FlutterActivity() {
                                     "verificationState" to "STREAMING"
                                 ))
 
-                                updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed))
+                                updateForegroundTransferProgress(safePct.toInt(), formatSpeed(movingAvgSpeed), fileName, overallSent, totalBytes, movingAvgSpeed, true)
                             }
                         }
                     }
@@ -2345,7 +2362,7 @@ class MainActivity : FlutterActivity() {
                 }.toString().toByteArray()))
                 output.flush()
 
-                notifyForegroundTransferComplete("Transfer complete", "")
+                notifyForegroundTransferComplete("Transfer complete", "", overallSent)
 
                 sendEvent("transferCompleted", mapOf(
                     "transferId" to transferId,
@@ -2724,7 +2741,15 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {}
     }
 
-    private fun updateForegroundTransferProgress(progress: Int, speed: String) {
+    private fun updateForegroundTransferProgress(
+        progress: Int,
+        speed: String,
+        fileName: String = "",
+        transferredBytes: Long = 0L,
+        totalBytes: Long = 0L,
+        speedBytesPerSec: Long = 0L,
+        isSending: Boolean = false
+    ) {
         try {
             val intent = Intent(this, TransferForegroundService::class.java).apply {
                 action = TransferForegroundService.ACTION_UPDATE
@@ -2733,9 +2758,21 @@ class MainActivity : FlutterActivity() {
             }
             startService(intent)
         } catch (e: Exception) {}
+
+        if (fileName.isNotBlank()) {
+            AuraOverlayManager.getInstance(this).showOrUpdateTransferProgress(
+                transferId = "current",
+                fileName = fileName,
+                progressPercent = progress,
+                transferredBytes = transferredBytes,
+                totalBytes = totalBytes,
+                speedBytesPerSec = speedBytesPerSec,
+                isSending = isSending
+            )
+        }
     }
 
-    private fun notifyForegroundTransferComplete(fileName: String, filePath: String) {
+    private fun notifyForegroundTransferComplete(fileName: String, filePath: String, totalBytes: Long = 0L) {
         try {
             val intent = Intent(this, TransferForegroundService::class.java).apply {
                 action = TransferForegroundService.ACTION_COMPLETE
@@ -2744,6 +2781,8 @@ class MainActivity : FlutterActivity() {
             }
             startService(intent)
         } catch (e: Exception) {}
+
+        AuraOverlayManager.getInstance(this).markTransferComplete(fileName, totalBytes)
     }
 
     private fun stopForegroundTransferService() {
@@ -2863,17 +2902,22 @@ class MainActivity : FlutterActivity() {
         peerName: String,
         deviceName: String = "",
         platform: String = "device",
-        ip: String = ""
+        ip: String = "",
+        avatarPath: String = ""
     ) {
-        // Display sleek floating window directly on mobile screen over other apps & home screen
+        // Display sleek floating window directly on mobile screen over other apps, home screen & lock screen
         AuraOverlayManager.getInstance(this).showNameDropOverlay(
             peerId = peerId,
             peerName = peerName,
             deviceName = deviceName,
             platform = platform,
             ip = ip,
+            avatarPath = avatarPath,
             onShare = {
                 sendEvent("peerSelected", mapOf("peerId" to peerId))
+            },
+            onChat = {
+                sendEvent("openChatWithPeer", mapOf("peerId" to peerId))
             }
         )
     }
