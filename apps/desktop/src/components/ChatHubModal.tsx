@@ -189,8 +189,22 @@ export const ChatHubModal: React.FC<ChatHubModalProps> = ({
   const selectedConversation = conversations.find((c) => c.peerId === selectedPeerId);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none animate-fade-in">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl select-none animate-fade-in"
+    >
       <div className="w-full max-w-4xl h-[620px] bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl flex relative overflow-hidden">
+        {/* Global Close Button - Always visible regardless of conversation selection */}
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 z-40 p-2 text-neutral-400 hover:text-white rounded-xl bg-neutral-900/80 hover:bg-white/10 border border-white/15 backdrop-blur-md transition-all active:scale-95"
+          title="Close Messages Hub"
+        >
+          <X className="w-4 h-4" />
+        </button>
+
         {/* Left Sidebar: Conversations List */}
         <div className="w-80 border-r border-white/10 flex flex-col bg-white/[0.02]">
           {/* Header */}

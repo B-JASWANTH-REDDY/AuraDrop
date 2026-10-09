@@ -124,25 +124,25 @@ class AuraTransferEngine {
 
     debugPrint('[AuraTransfer] Preparing transfer of $fileName ($resolvedFileSize bytes) to ${target.name} (${target.ip}:${target.port})');
 
-    // 1. Calculate SHA-256 incrementally (bounded RAM)
-    _progressController.add(TransferProgressInfo(
-      transferId: transferId,
-      fileName: fileName,
-      transferredBytes: 0,
-      totalBytes: resolvedFileSize,
-      speedMBps: 0.0,
-      etaSeconds: 0,
-      isSender: true,
-      state: 'VERIFYING',
-    ));
-
+    // 1. Calculate SHA-256 (only precompute for <= 20MB to prevent multi-minute freezes on large files)
     String expectedSha = '';
-    try {
-      final digest = await localFile.openRead().transform(sha256).single;
-      expectedSha = digest.toString();
-    } catch (e) {
-      _errorController.add('Error computing SHA-256: $e');
-      return false;
+    if (resolvedFileSize <= 20 * 1024 * 1024) {
+      _progressController.add(TransferProgressInfo(
+        transferId: transferId,
+        fileName: fileName,
+        transferredBytes: 0,
+        totalBytes: resolvedFileSize,
+        speedMBps: 0.0,
+        etaSeconds: 0,
+        isSender: true,
+        state: 'VERIFYING',
+      ));
+      try {
+        final digest = await localFile.openRead().transform(sha256).single;
+        expectedSha = digest.toString();
+      } catch (e) {
+        debugPrint('[AuraTransfer] Non-fatal SHA precompute notice: $e');
+      }
     }
 
     if (_isCancelled) return false;
@@ -169,6 +169,7 @@ class AuraTransferEngine {
 
       final preparePayload = jsonEncode({
         'transferId': transferId,
+        'fileId': transferId,
         'fileName': fileName,
         'fileSize': resolvedFileSize,
         'sha256': expectedSha,
@@ -178,7 +179,9 @@ class AuraTransferEngine {
         'receiverUserId': target.id,
       });
 
-      prepareReq.write(preparePayload);
+      final bodyBytes = utf8.encode(preparePayload);
+      prepareReq.contentLength = bodyBytes.length;
+      prepareReq.add(bodyBytes);
       final prepareResp = await prepareReq.close().timeout(const Duration(seconds: 45));
 
       if (prepareResp.statusCode != HttpStatus.ok) {
@@ -202,7 +205,7 @@ class AuraTransferEngine {
 
     if (_isCancelled) return false;
 
-    // 3. Streaming Binary Upload directly over LAN socket
+    // 3. Streaming Binary Upload directly over LAN socket with 2MB Turbo Buffer
     _progressController.add(TransferProgressInfo(
       transferId: transferId,
       fileName: fileName,
@@ -231,38 +234,46 @@ class AuraTransferEngine {
       final stopwatch = Stopwatch()..start();
       int lastEmit = 0;
 
-      // Stream file directly into HTTP socket
-      final fileStream = localFile.openRead();
-      await for (final chunk in fileStream) {
-        if (_isCancelled) {
-          uploadReq.abort();
-          return false;
+      // Stream file directly into HTTP socket via 2MB chunk buffer for max LAN throughput
+      final raf = await localFile.open(mode: FileMode.read);
+      const bufferSize = 2 * 1024 * 1024; // 2MB Turbo Buffer
+      try {
+        while (bytesSent < resolvedFileSize) {
+          if (_isCancelled) {
+            uploadReq.abort();
+            return false;
+          }
+          final toRead = math.min(bufferSize, resolvedFileSize - bytesSent);
+          final chunk = await raf.read(toRead);
+          if (chunk.isEmpty) break;
+
+          uploadReq.add(chunk);
+          bytesSent += chunk.length;
+
+          final nowMs = stopwatch.elapsedMilliseconds;
+          if (nowMs - lastEmit >= 200 || bytesSent == resolvedFileSize) {
+            lastEmit = nowMs;
+            final elapsedSeconds = math.max(0.001, nowMs / 1000.0);
+            final speedMBps = (bytesSent / (1024 * 1024)) / elapsedSeconds;
+            final remainingBytes = math.max(0, resolvedFileSize - bytesSent);
+            final speedBytes = bytesSent / elapsedSeconds;
+            final eta = speedBytes > 0 ? (remainingBytes / speedBytes).ceil() : 0;
+
+            _progressController.add(TransferProgressInfo(
+              transferId: transferId,
+              fileName: fileName,
+              transferredBytes: bytesSent,
+              totalBytes: resolvedFileSize,
+              speedMBps: speedMBps,
+              etaSeconds: eta,
+              isSender: true,
+              state: 'TRANSFERRING',
+            ));
+            lastEmit = nowMs;
+          }
         }
-
-        uploadReq.add(chunk);
-        bytesSent += chunk.length;
-
-        final nowMs = stopwatch.elapsedMilliseconds;
-        if (nowMs - lastEmit >= 200 || bytesSent == resolvedFileSize) {
-          lastEmit = nowMs;
-          final elapsedSeconds = math.max(0.001, nowMs / 1000.0);
-          final speedMBps = (bytesSent / (1024 * 1024)) / elapsedSeconds;
-          final remainingBytes = math.max(0, resolvedFileSize - bytesSent);
-          final speedBytes = bytesSent / elapsedSeconds;
-          final eta = speedBytes > 0 ? (remainingBytes / speedBytes).ceil() : 0;
-
-          _progressController.add(TransferProgressInfo(
-            transferId: transferId,
-            fileName: fileName,
-            transferredBytes: bytesSent,
-            totalBytes: resolvedFileSize,
-            speedMBps: speedMBps,
-            etaSeconds: eta,
-            isSender: true,
-            state: 'TRANSFERRING',
-          ));
-          lastEmit = nowMs;
-        }
+      } finally {
+        await raf.close();
       }
 
       final uploadResp = await uploadReq.close();

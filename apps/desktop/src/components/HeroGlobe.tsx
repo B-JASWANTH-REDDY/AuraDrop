@@ -62,18 +62,16 @@ function latLonToVec3(lat: number, lon: number): Vec3 {
 function slerp(p1: Vec3, p2: Vec3, t: number): Vec3 {
   let dot = p1.x * p2.x + p1.y * p2.y + p1.z * p2.z;
   dot = Math.max(-1.0, Math.min(1.0, dot));
-  const theta = Math.acos(dot) * t;
-  const relX = p2.x - p1.x * dot;
-  const relY = p2.y - p1.y * dot;
-  const relZ = p2.z - p1.z * dot;
-  const len = Math.hypot(relX, relY, relZ) || 1.0;
-  const normRel = { x: relX / len, y: relY / len, z: relZ / len };
-
-  return {
-    x: p1.x * Math.cos(theta) + normRel.x * Math.sin(theta),
-    y: p1.y * Math.cos(theta) + normRel.y * Math.sin(theta),
-    z: p1.z * Math.cos(theta) + normRel.z * Math.sin(theta),
-  };
+  const theta = Math.acos(dot);
+  if (Math.abs(theta) < 1e-5) return p1;
+  const sinTheta = Math.sin(theta);
+  const w1 = Math.sin((1.0 - t) * theta) / sinTheta;
+  const w2 = Math.sin(t * theta) / sinTheta;
+  const vx = p1.x * w1 + p2.x * w2;
+  const vy = p1.y * w1 + p2.y * w2;
+  const vz = p1.z * w1 + p2.z * w2;
+  const len = Math.hypot(vx, vy, vz) || 1.0;
+  return { x: vx / len, y: vy / len, z: vz / len };
 }
 
 const SPHERE_POINTS = generateSpherePoints(380);
@@ -90,8 +88,14 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [yaw, setYaw] = useState(0.0);
   const [pitch, setPitch] = useState(-0.25);
+  const [isRotating, setIsRotating] = useState(true);
+  const isRotatingRef = useRef(true);
+  isRotatingRef.current = isRotating;
+
   const isInteractingRef = useRef(false);
   const lastMousePosRef = useRef({ x: 0, y: 0 });
+  const pointerStartPosRef = useRef({ x: 0, y: 0 });
+  const hasDraggedRef = useRef(false);
   const visiblePeerPositionsRef = useRef<Map<string, { x: number; y: number; peer: PeerDevice }>>(new Map());
 
   const activePeer = peers.find((p) => p.id === selectedPeerId) || peers[0] || null;
@@ -116,11 +120,11 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
     }
   }
 
-  // Animation frame loop
+  // Animation frame loop: Rotates continuously until user touches/stops; resumes when touching another
   useEffect(() => {
     let animId: number;
     const animate = () => {
-      if (!isInteractingRef.current) {
+      if (!isInteractingRef.current && isRotatingRef.current) {
         setYaw((prev) => (prev + 0.0035) % (Math.PI * 2));
       }
       animId = requestAnimationFrame(animate);
@@ -216,42 +220,54 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
       const sLat = ((sHash % 50) / 100.0) - 0.2;
       const sLon = sIdx * angleStep + 0.6;
       const sPeerVec = latLonToVec3(sLat, sLon);
+      const sPeerRot = rotateX(rotateY(sPeerVec, yaw), pitch);
 
-      const segments = 40;
-      ctx.beginPath();
-      let first = true;
-      const arcScreenPoints: { x: number; y: number; z: number }[] = [];
+      // Strict front-hemisphere clipping: ONLY show connection lines when BOTH peer and user are on the front hemisphere!
+      const isVisibleOnFront = userRot.z > 0.05 && sPeerRot.z > 0.05;
+      if (isVisibleOnFront) {
+        const segments = 40;
+        ctx.beginPath();
+        let drawing = false;
+        const arcScreenPoints: { x: number; y: number; z: number }[] = [];
 
-      for (let s = 0; s <= segments; s++) {
-        const t = s / segments;
-        const interp = slerp(userSpherical, sPeerVec, t);
-        // Parabolic radial elevation above globe sphere
-        const lift = 1.0 + 0.28 * Math.sin(Math.PI * t);
-        const lifted: Vec3 = {
-          x: interp.x * lift,
-          y: interp.y * lift,
-          z: interp.z * lift,
-        };
-        const rot = rotateX(rotateY(lifted, yaw), pitch);
-        const sx = center.x + rot.x * radius;
-        const sy = center.y + rot.y * radius;
-        arcScreenPoints.push({ x: sx, y: sy, z: rot.z });
+        for (let s = 0; s <= segments; s++) {
+          const t = s / segments;
+          const interp = slerp(userSpherical, sPeerVec, t);
+          // Parabolic radial elevation above globe sphere
+          const lift = 1.0 + 0.28 * Math.sin(Math.PI * t);
+          const lifted: Vec3 = {
+            x: interp.x * lift,
+            y: interp.y * lift,
+            z: interp.z * lift,
+          };
+          const rot = rotateX(rotateY(lifted, yaw), pitch);
+          const sx = center.x + rot.x * radius;
+          const sy = center.y + rot.y * radius;
 
-        if (first) {
-          ctx.moveTo(sx, sy);
-          first = false;
-        } else {
-          ctx.lineTo(sx, sy);
+          // Only connect strictly front-facing points (rot.z >= 0.05) so lines never show when globe turns out
+          if (rot.z >= 0.05) {
+            arcScreenPoints.push({ x: sx, y: sy, z: rot.z });
+            if (!drawing) {
+              ctx.moveTo(sx, sy);
+              drawing = true;
+            } else {
+              ctx.lineTo(sx, sy);
+            }
+          } else {
+            drawing = false;
+          }
         }
-      }
 
-      ctx.save();
-      ctx.strokeStyle = isTransferring ? '#FFFFFF' : 'rgba(255, 255, 255, 0.85)';
-      ctx.lineWidth = isTransferring ? 2.5 : 1.8;
-      ctx.shadowColor = 'rgba(255, 255, 255, 0.7)';
-      ctx.shadowBlur = isTransferring ? 12 : 6;
-      ctx.stroke();
-      ctx.restore();
+        if (arcScreenPoints.length > 1) {
+          ctx.save();
+          const fadeAlpha = Math.max(0.25, Math.min(1.0, (sPeerRot.z + 0.3) * 1.5));
+          ctx.strokeStyle = isTransferring ? '#FFFFFF' : `rgba(255, 255, 255, ${0.85 * fadeAlpha})`;
+          ctx.lineWidth = isTransferring ? 2.5 : 1.8;
+          ctx.shadowColor = 'rgba(255, 255, 255, 0.7)';
+          ctx.shadowBlur = isTransferring ? 12 : 6;
+          ctx.stroke();
+          ctx.restore();
+        }
 
       // Animated energy particle traversing the arc beam
       if (arcScreenPoints.length > 0) {
@@ -273,6 +289,7 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         ctx.restore();
       }
     }
+  }
 
     // 5. Discovered Peer Markers
     peers.forEach((peer, i) => {
@@ -330,6 +347,8 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
 
   const handlePointerDown = (e: React.PointerEvent) => {
     isInteractingRef.current = true;
+    hasDraggedRef.current = false;
+    pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   };
@@ -339,6 +358,11 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
     const dx = e.clientX - lastMousePosRef.current.x;
     const dy = e.clientY - lastMousePosRef.current.y;
     lastMousePosRef.current = { x: e.clientX, y: e.clientY };
+
+    const totalDist = Math.hypot(e.clientX - pointerStartPosRef.current.x, e.clientY - pointerStartPosRef.current.y);
+    if (totalDist > 4) {
+      hasDraggedRef.current = true;
+    }
 
     setYaw((prev) => prev + dx * 0.008);
     setPitch((prev) => Math.max(-0.8, Math.min(0.8, prev + dy * 0.008)));
@@ -357,18 +381,33 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
     const clickY = e.clientY - rect.top;
 
     let closestPeer: PeerDevice | null = null;
-    let closestDist = 30;
+    let closestDist = 32;
 
-    visiblePeerPositionsRef.current.forEach((pos) => {
+    for (const pos of visiblePeerPositionsRef.current.values()) {
       const dist = Math.hypot(pos.x - clickX, pos.y - clickY);
       if (dist < closestDist) {
         closestDist = dist;
         closestPeer = pos.peer;
       }
-    });
+    }
 
-    if (closestPeer && onSelectPeer) {
-      onSelectPeer(closestPeer);
+    if (!hasDraggedRef.current) {
+      // It was a tap/click: Touching stops the globe, touching another peer rotates again!
+      if (closestPeer) {
+        if (selectedPeerId === closestPeer.id) {
+          // Tapping the already-selected peer toggles pause / rotate
+          setIsRotating((prev) => !prev);
+        } else {
+          // Tapping another peer selects it and restarts auto-rotation!
+          onSelectPeer?.(closestPeer);
+          setIsRotating(true);
+        }
+      } else {
+        // Tapping the globe background toggles pause / rotate
+        setIsRotating((prev) => !prev);
+      }
+    } else if (closestPeer) {
+      onSelectPeer?.(closestPeer);
     }
   };
 
@@ -391,16 +430,27 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
         style={{
           width: size,
           height: size,
-          cursor: 'grab',
+          cursor: isRotating ? 'grab' : 'crosshair',
           touchAction: 'none',
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
+        onPointerLeave={() => {
+          isInteractingRef.current = false;
+        }}
+        onPointerCancel={() => {
+          isInteractingRef.current = false;
+        }}
       />
 
-      <div className="text-[11px] text-neutral-500 mt-1 font-medium tracking-wide">
-        Drag globe to rotate • Click device to select
+      <div className="text-[11px] text-neutral-400 mt-1 font-medium tracking-wide flex items-center gap-2">
+        <span className={`w-1.5 h-1.5 rounded-full ${isRotating ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+        <span>
+          {isRotating
+            ? 'Rotating (Tap globe/peer to stop • Drag to inspect)'
+            : 'Stopped (Tap another peer or tap globe to rotate again)'}
+        </span>
       </div>
     </div>
   );

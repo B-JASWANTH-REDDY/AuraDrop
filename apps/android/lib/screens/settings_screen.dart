@@ -3,11 +3,10 @@ import 'package:flutter/services.dart';
 import '../models/models.dart';
 import '../services/native_bridge.dart';
 import '../services/profile_repository.dart';
-import '../services/aura_discovery_service.dart';
-import '../services/aura_lan_server.dart';
 import '../services/aura_update_service.dart';
 import '../theme/aura_theme.dart';
 import '../components/minimal_components.dart';
+import 'legal_and_about_screens.dart';
 
 class SettingsScreen extends StatefulWidget {
   final VisibilityMode currentVisibility;
@@ -45,6 +44,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _backgroundDiscovery = true;
   bool _allowNearbyRequests = true;
   bool _isCheckingUpdate = false;
+  bool _hasOverlayPermission = true;
+  bool _hasBatteryExemption = true;
 
   @override
   void initState() {
@@ -59,12 +60,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final trusted = await NativeBridgeService.getTrustedPeers();
     final blocked = await NativeBridgeService.getBlockedPeers();
     final profile = await ProfileRepository().loadProfile();
+    final hasOverlay = await NativeBridgeService.checkOverlayPermission();
+    final hasBattery = await NativeBridgeService.checkBatteryOptimizationExempt();
 
     if (mounted) {
       setState(() {
         _trustedPeers = trusted;
         _blockedPeers = blocked;
         _isLoadingPeers = false;
+        _hasOverlayPermission = hasOverlay;
+        _hasBatteryExemption = hasBattery;
         if (profile.theme.isNotEmpty) {
           _selectedThemeMode = profile.theme;
         }
@@ -283,6 +288,110 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     },
                     theme,
                   ),
+                  Divider(color: theme.border, height: 20),
+                  InkWell(
+                    onTap: () async {
+                      HapticFeedback.lightImpact();
+                      await NativeBridgeService.requestBatteryOptimizationExempt();
+                      _loadAllData();
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '24/7 Background Service',
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Unrestricted battery access so nearby devices are detected 24/7',
+                                  style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _hasBatteryExemption ? const Color(0xFF10B981).withOpacity(0.15) : const Color(0xFFF59E0B).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _hasBatteryExemption ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Text(
+                              _hasBatteryExemption ? 'ACTIVE' : 'GRANT',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: _hasBatteryExemption ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Divider(color: theme.border, height: 20),
+                  InkWell(
+                    onTap: () async {
+                      HapticFeedback.lightImpact();
+                      await NativeBridgeService.requestOverlayPermission();
+                      _loadAllData();
+                    },
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Display Over Other Apps',
+                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  'Shows floating AirDrop island on Home Screen, Lock Screen & other apps',
+                                  style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _hasOverlayPermission ? const Color(0xFF10B981).withOpacity(0.15) : const Color(0xFFF59E0B).withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: _hasOverlayPermission ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Text(
+                              _hasOverlayPermission ? 'ACTIVE' : 'GRANT',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: _hasOverlayPermission ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -471,74 +580,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             const SizedBox(height: 24),
 
-            // Network Engine & Architecture Section
-            _buildSectionHeader('Network Engine & Architecture', theme),
-            const SizedBox(height: 8),
-            MinimalCard(
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Color(0xFF10B981),
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Direct LAN Offline Socket',
-                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: theme.textPrimary),
-                      ),
-                      const Spacer(),
-                      Text(
-                        'ACTIVE',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          color: const Color(0xFF10B981),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  _buildAboutRow('Physical LAN IP', AuraLanServer().localIp, theme),
-                  Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Turbo Transfer Port', '${AuraLanServer().port}', theme),
-                  Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Discovery Port', '${AuraDiscoveryService.discoveryPort}', theme),
-                  Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Discovery Protocol', 'AURADROP/1 (UDP Multicast)', theme),
-                  Divider(color: theme.border, height: 16),
-                  _buildAboutRow('Transfer Mode', 'Direct Streaming Socket (Zero Cloud)', theme),
-                  Divider(color: theme.border, height: 16),
-                  _buildAboutRow('File Integrity', 'Hardware-Accelerated SHA-256', theme),
-                  const SizedBox(height: 14),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        HapticFeedback.lightImpact();
-                        _showDiagnosticsDialog(context, theme);
-                      },
-                      icon: const Icon(Icons.network_check_rounded, size: 16),
-                      label: const Text('Network Diagnostics & Subnet Ping', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: theme.textPrimary,
-                        side: BorderSide(color: theme.border),
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
+
 
             // Over-The-Air (OTA) Software Updates Section
             _buildSectionHeader('Over-The-Air (OTA) Updates', theme),
@@ -584,6 +626,141 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       icon: _isCheckingUpdate ? null : Icons.refresh_rounded,
                       onPressed: _isCheckingUpdate ? () {} : () => _checkForOtaUpdates(context, theme),
                     ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Support & Coffee Section
+            _buildSectionHeader('Support AuraDrop', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.coffee_rounded, color: Color(0xFFFFDD00), size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Buy Me a Coffee',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: theme.textPrimary),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'AuraDrop is 100% free and open-source. Voluntary tips support continuous updates and development.',
+                    style: TextStyle(fontSize: 12, color: theme.textSecondary, height: 1.4),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFFFDD00),
+                        foregroundColor: const Color(0xFF000000),
+                        padding: const EdgeInsets.symmetric(vertical: 11),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        elevation: 0,
+                      ),
+                      icon: const Icon(Icons.coffee_rounded, size: 16),
+                      label: const Text('Support AuraDrop', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800)),
+                      onPressed: () {
+                        HapticFeedback.lightImpact();
+                        showBuyMeACoffeeSheet(context, theme);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+
+            // Legal & About Section
+            _buildSectionHeader('Product & Legal', theme),
+            const SizedBox(height: 8),
+            MinimalCard(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  _buildNavTile(
+                    icon: Icons.info_outline_rounded,
+                    title: 'About AuraDrop',
+                    subtitle: 'v2.0.1 (Build 4) • Fast Local P2P AirDrop',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AboutAuraDropScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.devices_other_rounded,
+                    title: 'Device Information',
+                    subtitle: 'Local IP, interfaces, and ports',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const DeviceInformationScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.help_outline_rounded,
+                    title: 'Help & Support',
+                    subtitle: 'Troubleshooting and connection FAQ',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const HelpAndSupportScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.shield_outlined,
+                    title: 'Privacy Policy',
+                    subtitle: 'Local-only data practices & zero cloud',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const PrivacyPolicyScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.description_outlined,
+                    title: 'Terms of Service',
+                    subtitle: 'Acceptable use & license terms',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const TermsOfServiceScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.article_outlined,
+                    title: 'Software License (EULA)',
+                    subtitle: 'MIT Open-Source License',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const EulaScreen()),
+                    ),
+                    theme: theme,
+                  ),
+                  Divider(color: theme.border, height: 1),
+                  _buildNavTile(
+                    icon: Icons.code_rounded,
+                    title: 'Third-Party Open-Source Notices',
+                    subtitle: 'Credits and open source licenses',
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const ThirdPartyLicensesScreen()),
+                    ),
+                    theme: theme,
                   ),
                 ],
               ),
@@ -689,6 +866,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
         fontWeight: FontWeight.w700,
         color: theme.textSecondary,
         letterSpacing: 0.5,
+      ),
+    );
+  }
+
+  Widget _buildNavTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    required AuraTheme theme,
+  }) {
+    return InkWell(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Icon(icon, size: 20, color: theme.textPrimary),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    subtitle,
+                    style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.arrow_forward_ios_rounded, size: 13, color: theme.textSecondary),
+          ],
+        ),
       ),
     );
   }
@@ -861,145 +1083,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           inactiveTrackColor: theme.border,
         ),
       ],
-    );
-  }
-
-  Widget _buildAboutRow(String label, String value, AuraTheme theme) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(label, style: TextStyle(fontSize: 12, color: theme.textSecondary)),
-        Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.textPrimary)),
-      ],
-    );
-  }
-
-  void _showDiagnosticsDialog(BuildContext context, AuraTheme theme) async {
-    final diag = await AuraDiscoveryService().getDiagnostics();
-    if (!context.mounted) return;
-
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: theme.cardBackground,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            final peers = AuraDiscoveryService().currentPeers;
-            return SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(Icons.hub_rounded, color: theme.textPrimary, size: 22),
-                          const SizedBox(width: 10),
-                          Text(
-                            'LAN Network Diagnostics',
-                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: theme.textPrimary),
-                          ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.close_rounded, size: 20),
-                            onPressed: () => Navigator.pop(ctx),
-                            color: theme.textSecondary,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: theme.background,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: theme.border),
-                        ),
-                        child: Column(
-                          children: [
-                            _buildAboutRow('Active Adapter', diag['activeInterface']?.toString() ?? 'Detecting...', theme),
-                            Divider(color: theme.border, height: 16),
-                            _buildAboutRow('Physical IPv4', AuraLanServer().localIp, theme),
-                            Divider(color: theme.border, height: 16),
-                            _buildAboutRow('HTTP Server', 'Port ${AuraLanServer().port} (ACTIVE)', theme),
-                            Divider(color: theme.border, height: 16),
-                            _buildAboutRow('UDP Multicast Group', '224.0.0.167:53317', theme),
-                            Divider(color: theme.border, height: 16),
-                            _buildAboutRow('Discovered Peers', '${peers.length} online', theme),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      if (peers.isNotEmpty) ...[
-                        Text(
-                          'Online LAN Peers:',
-                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: theme.textSecondary),
-                        ),
-                        const SizedBox(height: 8),
-                        ...peers.map((p) => Container(
-                          margin: const EdgeInsets.only(bottom: 6),
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                          decoration: BoxDecoration(
-                            color: theme.background,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: theme.border),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(
-                                p.platform.toLowerCase().contains('android') ? Icons.android_rounded : Icons.desktop_windows_rounded,
-                                size: 16,
-                                color: const Color(0xFF10B981),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  '${p.name} (${p.ip}:${p.port})',
-                                  style: TextStyle(fontSize: 11, fontFamily: 'monospace', color: theme.textPrimary),
-                                ),
-                              ),
-                            ],
-                          ),
-                        )),
-                        const SizedBox(height: 12),
-                      ],
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          onPressed: () {
-                            HapticFeedback.mediumImpact();
-                            AuraDiscoveryService().forceAnnounce();
-                            setModalState(() {});
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('✓ UDP Discovery beacon broadcasted to subnet & multicast!'),
-                                duration: Duration(seconds: 2),
-                              ),
-                            );
-                          },
-                          icon: const Icon(Icons.wifi_tethering_rounded, size: 16),
-                          label: const Text('Force Subnet Announce / Ping Now', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: theme.textPrimary,
-                            foregroundColor: theme.background,
-                            padding: const EdgeInsets.symmetric(vertical: 12),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            );
-          },
-        );
-      },
     );
   }
 }

@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/models.dart';
@@ -331,6 +334,90 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  Future<void> _attachPhotoAndSend() async {
+    HapticFeedback.lightImpact();
+    final files = await NativeBridgeService.pickFiles();
+    if (files.isEmpty) return;
+
+    final file = files.first;
+    try {
+      final f = File(file.path);
+      if (!await f.exists()) return;
+      final bytes = await f.readAsBytes();
+
+      // Native downscale to max 1280px to prevent OOM and Binder transaction limit crashes
+      Uint8List sendBytes = bytes;
+      try {
+        final codec = await ui.instantiateImageCodec(bytes, targetWidth: 1200);
+        final frame = await codec.getNextFrame();
+        final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.png);
+        if (byteData != null) {
+          sendBytes = byteData.buffer.asUint8List();
+        }
+      } catch (e) {
+        debugPrint('[ChatScreen] Downscale fallback: $e');
+      }
+
+      final base64Str = base64Encode(sendBytes);
+      final payload = '[IMAGE]:data:image/jpeg;base64,$base64Str';
+
+      final msgId = 'msg_${DateTime.now().millisecondsSinceEpoch}';
+      final optimisticMsg = ChatMessage(
+        id: msgId,
+        peerId: widget.peer.id,
+        peerName: widget.peer.name,
+        senderId: 'me',
+        text: payload,
+        timestamp: DateTime.now(),
+        status: 'sending',
+      );
+      setState(() {
+        _messages.add(optimisticMsg);
+      });
+      _scrollToBottom();
+
+      await NativeBridgeService.sendChatMessage(
+        targetIp: widget.peer.ip,
+        targetPort: widget.peer.port,
+        peerId: widget.peer.id,
+        peerName: widget.peer.name,
+        text: payload,
+      );
+    } catch (e) {
+      debugPrint('[ChatScreen] Error sending photo: $e');
+    }
+  }
+
+  void _showImageDialog(Uint8List bytes) {
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.9),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            InteractiveViewer(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.memory(bytes, fit: BoxFit.contain),
+              ),
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                icon: const Icon(Icons.close_rounded, color: Colors.white, size: 28),
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _onTextChanged(String text) {
     NativeBridgeService.sendChatTyping(targetIp: widget.peer.ip, isTyping: text.isNotEmpty);
     _typingTimer?.cancel();
@@ -425,13 +512,26 @@ class _ChatScreenState extends State<ChatScreen> {
                         final msg = _messages[index];
                         final isMe = msg.senderId != widget.peer.id;
                         final isFile = msg.messageType == 'file' || msg.text.startsWith('📎');
+                        final isImage = msg.text.startsWith('[IMAGE]:') || msg.text.startsWith('data:image/');
+                        Uint8List? imageBytes;
+                        if (isImage) {
+                          try {
+                            String raw = msg.text;
+                            if (raw.startsWith('[IMAGE]:')) raw = raw.substring(8);
+                            final commaIdx = raw.indexOf(',');
+                            if (commaIdx != -1) {
+                              raw = raw.substring(commaIdx + 1);
+                            }
+                            imageBytes = base64Decode(raw.trim());
+                          } catch (_) {}
+                        }
 
                         return Align(
                           alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                           child: Container(
                             margin: const EdgeInsets.symmetric(vertical: 4),
                             constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.76),
-                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            padding: isImage ? const EdgeInsets.all(4) : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                             decoration: BoxDecoration(
                               color: isMe ? theme.actionBackground : theme.cardBackground,
                               borderRadius: BorderRadius.circular(14),
@@ -443,7 +543,41 @@ class _ChatScreenState extends State<ChatScreen> {
                             child: Column(
                               crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
                               children: [
-                                if (isFile) ...[
+                                if (isImage && imageBytes != null) ...[
+                                  GestureDetector(
+                                    onTap: () => _showImageDialog(imageBytes!),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Stack(
+                                        alignment: Alignment.bottomRight,
+                                        children: [
+                                          Image.memory(
+                                            imageBytes,
+                                            width: 220,
+                                            height: 180,
+                                            fit: BoxFit.cover,
+                                          ),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            margin: const EdgeInsets.all(6),
+                                            decoration: BoxDecoration(
+                                              color: Colors.black.withValues(alpha: 0.65),
+                                              borderRadius: BorderRadius.circular(6),
+                                            ),
+                                            child: const Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(Icons.zoom_in_rounded, size: 12, color: Colors.white),
+                                                SizedBox(width: 3),
+                                                Text('View', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ] else if (isFile) ...[
                                   Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
@@ -534,6 +668,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   MinimalIconButton(
                     icon: Icons.attach_file_rounded,
                     onPressed: _attachFileAndSend,
+                    size: 38,
+                  ),
+                  const SizedBox(width: 6),
+                  MinimalIconButton(
+                    icon: Icons.image_rounded,
+                    onPressed: _attachPhotoAndSend,
                     size: 38,
                   ),
                   const SizedBox(width: 8),

@@ -95,6 +95,12 @@ pub async fn send_files_to_peer(
 }
 
 #[tauri::command]
+pub async fn cancel_transfer(transfer_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.transfer.cancel_transfer(&transfer_id).await;
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn open_downloads_folder(state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.transfer.get_downloads_dir();
     #[cfg(target_os = "windows")]
@@ -363,6 +369,25 @@ pub async fn open_file(
     #[cfg(target_os = "linux")]
     {
         let _ = std::process::Command::new("xdg-open").arg(&target).spawn();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
     }
     Ok(())
 }

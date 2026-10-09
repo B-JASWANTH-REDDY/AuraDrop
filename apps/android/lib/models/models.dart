@@ -410,6 +410,7 @@ class PickedFileMeta {
       'size': size,
       'mimeType': mimeType,
       'uri': uri,
+      'path': path,
     };
   }
 }

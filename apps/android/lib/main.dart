@@ -217,17 +217,20 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           : realDevName;
 
       await AuraIdentityService().init();
+      final nativeId = info['deviceId']?.toString();
+      if (nativeId != null && nativeId.isNotEmpty) {
+        AuraIdentityService().syncWithNative(
+          deviceId: nativeId,
+          deviceName: realDispName.isNotEmpty ? realDispName : realDevName,
+        );
+      }
       final idService = AuraIdentityService();
-      if (idService.deviceId.isNotEmpty) {
-        _deviceId = idService.deviceId;
-      }
-      if (idService.deviceName.isNotEmpty && _deviceName.isEmpty) {
-        _deviceName = idService.deviceName;
-      }
+      _deviceId = idService.deviceId;
+      _deviceName = idService.deviceName;
 
       setState(() {
-        _deviceId = info['deviceId']?.toString() ?? _deviceId;
-        _deviceName = realDispName.isNotEmpty ? realDispName : _deviceName;
+        _deviceId = idService.deviceId;
+        _deviceName = idService.deviceName;
         _localIp = info['ipAddress']?.toString() ?? _localIp;
         _userProfile = prof;
         for (final t in trusted) {
@@ -244,6 +247,17 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
       // Start Native UDP Auto-Discovery & Direct Transfer Engine
       await AuraDiscoveryService().start();
       AuraTransferEngine().init();
+
+      // Check if 24/7 background service permissions are missing and prompt user
+      Future.delayed(const Duration(milliseconds: 1200), () async {
+        if (!mounted) return;
+        final hasOverlay = await NativeBridgeService.checkOverlayPermission();
+        final hasBattery = await NativeBridgeService.checkBatteryOptimizationExempt();
+        if (!mounted) return;
+        if (!hasOverlay || !hasBattery) {
+          _promptBackgroundPermissions(context);
+        }
+      });
 
       _discoverySubscription = AuraDiscoveryService().onPeersChanged.listen((peers) {
         if (!mounted) return;
@@ -423,13 +437,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           _peers[peer.id] = peer;
         });
         if (isNew) {
-          NativeBridgeService.showNameDropProximityAlert(
-            peerId: peer.id,
-            peerName: peer.name,
-            deviceName: peer.deviceName,
-            platform: peer.platform,
-            ip: peer.ip,
-          );
           InAppNotificationController().showNameDrop(
             peerName: peer.name,
             deviceName: peer.deviceName,
@@ -584,14 +591,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             _peers[peer.id] = peer;
           });
           if (isNew) {
-            NativeBridgeService.showNameDropProximityAlert(
-              peerId: peer.id,
-              peerName: peer.name,
-              deviceName: peer.deviceName,
-              platform: peer.platform,
-              ip: peer.ip,
-              avatarPath: peer.avatarPath,
-            );
             InAppNotificationController().showNameDrop(
               peerName: peer.name,
               deviceName: peer.deviceName,
@@ -760,6 +759,19 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             transferId: tId,
           );
         }
+        break;
+
+      case 'transferCancelled':
+        HapticFeedback.lightImpact();
+        setState(() {
+          _transferState = TransferState.idle;
+          _activeTransferId = '';
+          _transferredBytes = 0;
+          _totalTransferBytes = 1;
+          _speedBytesPerSec = 0;
+          _etaSeconds = 0;
+        });
+        _showSnackBar('Transfer cancelled', isSuccess: false);
         break;
 
       case 'transferError':
@@ -1005,10 +1017,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     HapticFeedback.selectionClick();
     AuraTransferEngine().cancelActiveTransfer();
     AuraWebRtcService().cancelTransfer();
-    if (_activeTransferId.isNotEmpty) {
-      await NativeBridgeService.cancelTransfer(_activeTransferId);
-    }
-    setState(() => _transferState = TransferState.idle);
+    await NativeBridgeService.cancelTransfer(_activeTransferId);
+    setState(() {
+      _transferState = TransferState.idle;
+      _activeTransferId = '';
+      _transferredBytes = 0;
+      _totalTransferBytes = 1;
+      _speedBytesPerSec = 0;
+      _etaSeconds = 0;
+    });
   }
 
   void _showIncomingTransferModal(Map<dynamic, dynamic> req) {
@@ -1797,6 +1814,134 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 isSending: _isSender,
                 onCancel: _cancelTransfer,
               ),
+      ),
+    );
+  }
+
+  void _promptBackgroundPermissions(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          color: const Color(0xFF141416),
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF22C55E).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(Icons.bolt_rounded, color: Color(0xFF22C55E), size: 26),
+                ),
+                const SizedBox(width: 14),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Enable 24/7 AirDrop',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: Colors.white),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Instant Nearby Detection & Sharing',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Text(
+              'To show the real-time AirDrop popup on your Home Screen, Lock Screen, and over other apps 24/7, AuraDrop requires background permissions:',
+              style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.85), height: 1.4),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.04),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.picture_in_picture_alt_rounded, color: Colors.white, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Display Over Other Apps (AirDrop Floating Island)',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.9)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(color: Colors.white10, height: 16),
+                  Row(
+                    children: [
+                      const Icon(Icons.battery_charging_full_rounded, color: Colors.white, size: 18),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Unrestricted Background Battery (24/7 UDP Listening)',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white.withOpacity(0.9)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 22),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  elevation: 0,
+                ),
+                onPressed: () async {
+                  HapticFeedback.mediumImpact();
+                  Navigator.pop(ctx);
+                  await NativeBridgeService.requestAllBackgroundPermissions();
+                },
+                child: const Text(
+                  'Grant Background Permissions',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(
+                  'Later',
+                  style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.5)),
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

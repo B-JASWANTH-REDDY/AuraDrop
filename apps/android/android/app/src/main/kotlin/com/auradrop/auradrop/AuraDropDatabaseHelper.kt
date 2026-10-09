@@ -4,8 +4,10 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import android.util.Base64
+import java.io.File
 
-class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
+class AuraDropDatabaseHelper(private val context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         const val DATABASE_NAME = "auradrop.db"
@@ -227,12 +229,30 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
     // -------------------------------------------------------------------------
     fun insertChatMessage(msg: Map<String, Any>): Boolean {
         val db = writableDatabase
+        var textToStore = msg["text"]?.toString() ?: ""
+        val msgId = msg["id"]?.toString() ?: ("msg_" + System.currentTimeMillis())
+
+        // If message is a large image string, persist to disk cache to avoid SQLite CursorWindow (2MB) limit
+        if (textToStore.startsWith("[IMAGE]:") && textToStore.length > 200_000) {
+            try {
+                val cacheDir = File(context.cacheDir, "chat_images").apply { mkdirs() }
+                val cacheFile = File(cacheDir, "img_${msgId}.jpg")
+                val commaIdx = textToStore.indexOf(",")
+                if (commaIdx != -1) {
+                    val b64 = textToStore.substring(commaIdx + 1)
+                    val bytes = Base64.decode(b64, Base64.DEFAULT)
+                    cacheFile.writeBytes(bytes)
+                    textToStore = "[FILE_IMAGE]:${cacheFile.absolutePath}"
+                }
+            } catch (_: Exception) {}
+        }
+
         val cv = ContentValues().apply {
-            put(COL_CHAT_ID, msg["id"]?.toString())
+            put(COL_CHAT_ID, msgId)
             put(COL_CHAT_PEER_ID, msg["peerId"]?.toString())
             put(COL_CHAT_PEER_NAME, msg["peerName"]?.toString())
             put(COL_CHAT_SENDER_ID, msg["senderId"]?.toString())
-            put(COL_CHAT_TEXT, msg["text"]?.toString())
+            put(COL_CHAT_TEXT, textToStore)
             put(COL_CHAT_TIMESTAMP, (msg["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis())
             put(COL_CHAT_STATUS, msg["status"]?.toString() ?: "sent")
         }
@@ -243,17 +263,29 @@ class AuraDropDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATAB
         val list = mutableListOf<Map<String, Any>>()
         val db = readableDatabase
         val cursor = db.rawQuery(
-            "SELECT * FROM $TABLE_CHATS WHERE $COL_CHAT_PEER_ID = ? ORDER BY $COL_CHAT_TIMESTAMP ASC",
-            arrayOf(peerId)
+            "SELECT * FROM $TABLE_CHATS WHERE $COL_CHAT_PEER_ID = ? OR $COL_CHAT_SENDER_ID = ? ORDER BY $COL_CHAT_TIMESTAMP ASC",
+            arrayOf(peerId, peerId)
         )
         cursor.use { c ->
             while (c.moveToNext()) {
+                var storedText = c.getString(c.getColumnIndexOrThrow(COL_CHAT_TEXT)) ?: ""
+                if (storedText.startsWith("[FILE_IMAGE]:")) {
+                    try {
+                        val filePath = storedText.removePrefix("[FILE_IMAGE]:")
+                        val f = File(filePath)
+                        if (f.exists()) {
+                            val bytes = f.readBytes()
+                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                            storedText = "[IMAGE]:data:image/jpeg;base64,$b64"
+                        }
+                    } catch (_: Exception) {}
+                }
                 list.add(mapOf(
                     "id" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_ID)),
                     "peerId" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_PEER_ID)),
                     "peerName" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_PEER_NAME)),
                     "senderId" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_SENDER_ID)),
-                    "text" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_TEXT)),
+                    "text" to storedText,
                     "timestamp" to c.getLong(c.getColumnIndexOrThrow(COL_CHAT_TIMESTAMP)),
                     "status" to c.getString(c.getColumnIndexOrThrow(COL_CHAT_STATUS))
                 ))

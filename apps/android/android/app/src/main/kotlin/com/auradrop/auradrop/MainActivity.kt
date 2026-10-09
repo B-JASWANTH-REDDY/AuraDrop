@@ -16,7 +16,9 @@ import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
@@ -124,7 +126,7 @@ class MainActivity : FlutterActivity() {
         private const val LEGACY_DISCOVERY_GROUP = "239.255.48.29"
         private const val LEGACY_DISCOVERY_PORT = 48290
         private const val LEGACY_TRANSFER_PORT = 48291
-        private const val SOCKET_BUFFER_SIZE = 2 * 1024 * 1024 // 2 MB buffer for max wire throughput
+        private const val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024 // 4 MB buffer for 100MB/s wire throughput
         private const val PROGRESS_EVENT_INTERVAL_MS = 90L // ~11 UI updates/sec to avoid IPC bottleneck
         const val INCOMING_REQUEST_CHANNEL_ID = "auradrop_incoming_requests"
         const val CHAT_NOTIFICATION_CHANNEL_ID = "auradrop_chat_messages"
@@ -165,8 +167,10 @@ class MainActivity : FlutterActivity() {
     // Sockets and Transfer Sessions
     private val activeClientSockets = ConcurrentHashMap<String, Socket>()
     private val activeTransfersState = ConcurrentHashMap<String, TransferSession>()
+    private val activeHttpConnections = ConcurrentHashMap<String, HttpURLConnection>()
     private val activePeerChatSockets = ConcurrentHashMap<String, Socket>()
     private val httpUploadSessions = ConcurrentHashMap<String, HttpUploadSession>()
+    private val pendingHttpDecisions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -239,12 +243,30 @@ class MainActivity : FlutterActivity() {
         } else {
             deviceName = sysDev
         }
+
+        // Start 24/7 background listener & broadcaster service
+        try {
+            val bgIntent = Intent(this, AuraBackgroundService::class.java).apply {
+                action = AuraBackgroundService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(bgIntent)
+            } else {
+                startService(bgIntent)
+            }
+            Log.d(TAG, "Launched 24/7 AuraBackgroundService from MainActivity")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start AuraBackgroundService: ${e.message}")
+        }
+
         handleSendIntent(intent)
     }
 
     override fun onResume() {
         super.onResume()
         isAppInForeground = true
+        AuraOverlayManager.getInstance(this).isAppInForeground = true
+        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
         if (!AuraOverlayManager.getInstance(this).canDrawOverlays()) {
             mainHandler.postDelayed({
                 AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
@@ -255,6 +277,7 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         super.onPause()
         isAppInForeground = false
+        AuraOverlayManager.getInstance(this).isAppInForeground = false
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -390,6 +413,18 @@ class MainActivity : FlutterActivity() {
                     val filePath = call.argument<String>("filePath") ?: ""
                     val opened = openFileWithSystemViewer(filePath)
                     result.success(opened)
+                }
+                "openUrl" -> {
+                    val urlStr = call.argument<String>("url") ?: ""
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlStr))
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to open URL: ${e.message}")
+                        result.success(false)
+                    }
                 }
                 "copyUriToCache" -> {
                     val uriStr = call.argument<String>("uri") ?: ""
@@ -578,6 +613,23 @@ class MainActivity : FlutterActivity() {
                     AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
                     result.success(true)
                 }
+                "checkBatteryOptimizationExempt" -> {
+                    val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                    val isExempt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        pm?.isIgnoringBatteryOptimizations(packageName) ?: false
+                    } else {
+                        true
+                    }
+                    result.success(isExempt)
+                }
+                "requestBatteryOptimizationExempt" -> {
+                    requestBatteryOptimizationExemption()
+                    result.success(true)
+                }
+                "requestBackgroundPermissions" -> {
+                    requestAllBackgroundPermissions()
+                    result.success(true)
+                }
                 "showSystemIncomingShareNotification" -> {
                     val transferId = call.argument<String>("transferId") ?: UUID.randomUUID().toString()
                     val senderName = call.argument<String>("senderName") ?: "Nearby Peer"
@@ -629,6 +681,10 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    fun sendEventFromBackground(type: String, data: Map<String, Any>) {
+        sendEvent(type, data)
+    }
+
     // ----------------------------------------------------
     // Android Permissions Management
     // ----------------------------------------------------
@@ -654,6 +710,42 @@ class MainActivity : FlutterActivity() {
         if (needed.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
         }
+    }
+
+    private fun requestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                if (pm != null && !pm.isIgnoringBatteryOptimizations(packageName)) {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
+                    Log.d(TAG, "Requested ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS")
+                }
+            } catch (e: Exception) {
+                try {
+                    val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(fallback)
+                    Log.d(TAG, "Opened ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS")
+                } catch (e2: Exception) {
+                    Log.e(TAG, "Failed to launch battery optimization settings: ${e2.message}")
+                }
+            }
+        }
+    }
+
+    private fun requestAllBackgroundPermissions() {
+        checkAndRequestPermissions()
+        mainHandler.postDelayed({
+            if (!AuraOverlayManager.getInstance(this).canDrawOverlays()) {
+                AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
+            }
+            requestBatteryOptimizationExemption()
+        }, 800)
     }
 
     // ----------------------------------------------------
@@ -942,11 +1034,13 @@ class MainActivity : FlutterActivity() {
                         )
                         val isNew = PeerRegistry.updateOrAdd(peer)
                         sendEvent("peerDiscovered", mapOf("peer" to peer.toMap()))
-                        if (isNew) {
+
+                        // If user is outside the app, immediately show floating AirDrop Dynamic Island overlay
+                        if (isNew && !isAppInForeground) {
                             mainHandler.post {
                                 showSystemNameDropProximityNotification(
                                     peerId = peer.deviceId,
-                                    peerName = resolvedName,
+                                    peerName = peer.displayName,
                                     deviceName = peer.deviceName,
                                     platform = peer.platform,
                                     ip = peer.ip,
@@ -972,17 +1066,99 @@ class MainActivity : FlutterActivity() {
     private fun startTransferServerSocket() {
         if (transferServer != null) return
         serverJob = scope.launch(Dispatchers.IO) {
+            if (AuraQuicNative.isAvailable() && AuraQuicNative.quicPort == 0) {
+                try {
+                    AuraQuicNative.registerIncomingListener(object : AuraQuicIncomingListener {
+                        override fun onIncomingProgress(transferId: String, fileName: String, bytesTransferred: Long, totalBytes: Long, speedMbps: Double): Boolean {
+                            val session = activeTransfersState[transferId]
+                            if (session?.isCancelled?.get() == true) {
+                                AuraQuicNative.cancel(transferId)
+                                return false
+                            }
+                            val pct = if (totalBytes > 0) ((bytesTransferred.toDouble() / totalBytes.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                            val speedBytes = (speedMbps * 1024.0 * 1024.0 / 8.0).toLong()
+                            val eta = if (speedBytes > 0) ((totalBytes - bytesTransferred) / speedBytes).toInt() else 0
+
+                            sendEvent("transferProgress", mapOf(
+                                "transferId" to transferId,
+                                "state" to "TRANSFERRING",
+                                "fileName" to fileName,
+                                "totalBytes" to totalBytes,
+                                "transferredBytes" to bytesTransferred,
+                                "speedBytesPerSec" to speedBytes,
+                                "etaSeconds" to eta,
+                                "percentage" to pct
+                            ))
+
+                            updateForegroundTransferProgress(pct, "${String.format("%.1f", speedMbps)} MB/s", fileName, bytesTransferred, totalBytes, speedBytes, false)
+                            AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                transferId = transferId,
+                                fileName = fileName,
+                                progressPercent = pct,
+                                transferredBytes = bytesTransferred,
+                                totalBytes = totalBytes,
+                                speedBytesPerSec = speedBytes,
+                                isSending = false
+                            )
+                            return true
+                        }
+
+                        override fun onIncomingComplete(transferId: String, fileName: String, filePath: String, totalBytes: Long) {
+                            stopForegroundTransferService()
+                            val session = activeTransfersState[transferId]
+                            val peerName = session?.senderName ?: "Nearby Device"
+
+                            dbHelper.insertTransfer(mapOf(
+                                "id" to transferId,
+                                "timestamp" to System.currentTimeMillis(),
+                                "senderName" to peerName,
+                                "receiverName" to deviceName,
+                                "fileName" to fileName,
+                                "fileType" to "application/octet-stream",
+                                "fileSize" to totalBytes,
+                                "direction" to "received",
+                                "status" to "completed",
+                                "durationMs" to 0L,
+                                "avgSpeed" to 0L,
+                                "sha256" to "",
+                                "localPath" to filePath,
+                                "transportType" to "QUIC_DATAPLANE"
+                            ))
+
+                            sendEvent("transferComplete", mapOf(
+                                "transferId" to transferId,
+                                "fileName" to fileName,
+                                "fileSize" to totalBytes,
+                                "verified" to true
+                            ))
+
+                            notifyForegroundTransferComplete(fileName, filePath, totalBytes)
+                            AuraOverlayManager.getInstance(applicationContext).markTransferComplete(fileName, totalBytes)
+                        }
+                    })
+
+                    val prof = dbHelper.getProfile()
+                    val devId = prof["device_id"] ?: deviceId
+                    AuraQuicNative.startServer(devId, 53318)
+                    Log.i(TAG, "QUIC Server initialized on port ${AuraQuicNative.quicPort}, certFP=${AuraQuicNative.certFingerprint}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start QUIC server: ${e.message}")
+                }
+            }
+
             try {
                 transferServer = try {
-                    ServerSocket(DEFAULT_PORT, 50).apply {
-                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                    ServerSocket().apply {
                         reuseAddress = true
+                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                        bind(InetSocketAddress(DEFAULT_PORT), 100)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Port $DEFAULT_PORT bind failed, using $LEGACY_TRANSFER_PORT: ${e.message}")
-                    ServerSocket(LEGACY_TRANSFER_PORT, 50).apply {
-                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                    ServerSocket().apply {
                         reuseAddress = true
+                        receiveBufferSize = SOCKET_BUFFER_SIZE
+                        bind(InetSocketAddress(LEGACY_TRANSFER_PORT), 100)
                     }
                 }
                 while (isActive) {
@@ -1219,6 +1395,14 @@ class MainActivity : FlutterActivity() {
 
                         if (!isAppInForeground) {
                             showSystemChatMessageNotification(peerName, text)
+                            AuraOverlayManager.getInstance(applicationContext).showChatMessageOverlay(
+                                peerId = peerId,
+                                senderName = peerName,
+                                messageText = text,
+                                onOpenChat = {
+                                    sendEvent("openChatForPeer", mapOf("peerId" to peerId, "peerName" to peerName))
+                                }
+                            )
                         }
 
                         // Send CHAT_ACK
@@ -1327,6 +1511,13 @@ class MainActivity : FlutterActivity() {
 
             val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
 
+            // Handle HTTP Expect: 100-continue handshake immediately so clients streaming bodies never stall
+            if (headers["expect"]?.contains("100-continue", ignoreCase = true) == true) {
+                val continueResp = "HTTP/1.1 100 Continue\r\n\r\n"
+                output.write(continueResp.toByteArray(Charsets.UTF_8))
+                output.flush()
+            }
+
             fun sendJsonResponse(statusCode: Int, statusText: String, json: JSONObject) {
                 val body = json.toString().toByteArray(Charsets.UTF_8)
                 val resp = "HTTP/1.1 $statusCode $statusText\r\n" +
@@ -1337,6 +1528,9 @@ class MainActivity : FlutterActivity() {
                 output.write(resp.toByteArray(Charsets.UTF_8))
                 output.write(body)
                 output.flush()
+                try {
+                    socket.shutdownOutput()
+                } catch (_: Exception) {}
             }
 
             if (method == "OPTIONS") {
@@ -1412,6 +1606,14 @@ class MainActivity : FlutterActivity() {
 
                     if (!isAppInForeground) {
                         showSystemChatMessageNotification(senderName, text)
+                        AuraOverlayManager.getInstance(applicationContext).showChatMessageOverlay(
+                            peerId = senderId,
+                            senderName = senderName,
+                            messageText = text,
+                            onOpenChat = {
+                                sendEvent("openChatForPeer", mapOf("peerId" to senderId, "peerName" to senderName))
+                            }
+                        )
                     }
 
                     sendJsonResponse(200, "OK", JSONObject().apply { put("status", "ok") })
@@ -1468,14 +1670,80 @@ class MainActivity : FlutterActivity() {
                         sasCode = ""
                     )
 
-                    sendJsonResponse(200, "OK", JSONObject().apply {
-                        put("accepted", true)
-                        put("transferId", xferId)
-                        put("fileId", xferId)
-                        put("oneTimeToken", "tok_$xferId")
-                        put("expiresAt", System.currentTimeMillis() + 60000L)
-                        put("protocol", "auradrop/1")
-                    })
+                    val decisionDeferred = CompletableDeferred<Boolean>()
+                    pendingHttpDecisions[xferId] = decisionDeferred
+
+                    // Show AirDrop floating island overlay (lock screen / home screen / other apps)
+                    AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
+                        transferId = xferId,
+                        senderName = senderName,
+                        fileName = fileName,
+                        totalBytes = fileSize,
+                        onAccept = {
+                            Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
+                            acceptIncomingTransfer(xferId)
+                        },
+                        onDecline = {
+                            Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
+                            declineIncomingTransfer(xferId)
+                        }
+                    )
+
+                    // Also dispatch Flutter event so in-app receive dialog displays if user is in app
+                    sendEvent("incomingShareRequest", mapOf(
+                        "requestId" to xferId,
+                        "transferId" to xferId,
+                        "senderName" to senderName,
+                        "senderDeviceId" to senderUserId,
+                        "firstFileName" to fileName,
+                        "fileName" to fileName,
+                        "totalBytes" to fileSize,
+                        "fileCount" to 1
+                    ))
+
+                    // Await user's explicit Accept or Decline decision (up to 60 seconds)
+                    val accepted = withTimeoutOrNull(60000L) {
+                        decisionDeferred.await()
+                    } ?: false
+                    pendingHttpDecisions.remove(xferId)
+
+                    if (accepted) {
+                        val token = "tok_$xferId"
+                        val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+                        if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                        val targetFile = resolveUniqueFile(downloadsDir, fileName)
+
+                        if (AuraQuicNative.isAvailable() && AuraQuicNative.quicPort > 0) {
+                            AuraQuicNative.approveIncomingTransfer(
+                                transferId = xferId,
+                                token = token,
+                                fileName = fileName,
+                                fileSize = fileSize,
+                                expectedSha256 = sha256,
+                                destinationPath = targetFile.absolutePath
+                            )
+                        }
+
+                        sendJsonResponse(200, "OK", JSONObject().apply {
+                            put("accepted", true)
+                            put("transferId", xferId)
+                            put("fileId", xferId)
+                            put("oneTimeToken", token)
+                            put("expiresAt", System.currentTimeMillis() + 60000L)
+                            put("protocol", if (AuraQuicNative.quicPort > 0) "auradrop/quic/1" else "auradrop/1")
+                            if (AuraQuicNative.quicPort > 0) {
+                                put("quicPort", AuraQuicNative.quicPort)
+                                AuraQuicNative.certFingerprint?.let { put("certFingerprint", it) }
+                            }
+                        })
+                    } else {
+                        cancelSystemIncomingShareNotification(xferId)
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        sendJsonResponse(403, "Forbidden", JSONObject().apply {
+                            put("accepted", false)
+                            put("error", "Transfer declined or timed out by recipient")
+                        })
+                    }
                 }
 
                 "/api/auradrop/v1/upload" -> {
@@ -1487,6 +1755,17 @@ class MainActivity : FlutterActivity() {
                     val expectedSha256 = sessionMeta?.sha256 ?: headers["x-sha256"] ?: ""
                     val senderName = sessionMeta?.senderName ?: "Nearby Device"
 
+                    if (xferId.isNotEmpty()) {
+                        activeClientSockets[xferId] = socket
+                        if (!activeTransfersState.containsKey(xferId)) {
+                            activeTransfersState[xferId] = TransferSession(
+                                transferId = xferId,
+                                socket = socket,
+                                senderName = senderName
+                            )
+                        }
+                    }
+
                     val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
                     if (!downloadsDir.exists()) downloadsDir.mkdirs()
 
@@ -1494,16 +1773,29 @@ class MainActivity : FlutterActivity() {
                     val digest = MessageDigest.getInstance("SHA-256")
 
                     var totalWritten = 0L
-                    val buf = ByteArray(1024 * 1024)
+                    val buf = ByteArray(2 * 1024 * 1024)
                     val startTime = System.currentTimeMillis()
                     var lastProgressTime = 0L
 
                     startForegroundTransferService("Receiving $fileName...", 0)
+                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                        transferId = xferId,
+                        fileName = fileName,
+                        progressPercent = 0,
+                        transferredBytes = 0L,
+                        totalBytes = fileSize,
+                        speedBytesPerSec = 0L,
+                        isSending = false
+                    )
 
                     val fos = FileOutputStream(targetFile)
                     try {
-                        val bos = BufferedOutputStream(fos, 1024 * 1024)
+                        val bos = BufferedOutputStream(fos, 2 * 1024 * 1024)
                         while (totalWritten < fileSize) {
+                            if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
+                                Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
+                                break
+                            }
                             val toRead = Math.min(buf.size.toLong(), fileSize - totalWritten).toInt()
                             val r = input.read(buf, 0, toRead)
                             if (r == -1) break
@@ -1529,14 +1821,39 @@ class MainActivity : FlutterActivity() {
                                     "etaSeconds" to eta,
                                     "percentage" to pct
                                 ))
+
+                                updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
+                                AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                    transferId = xferId,
+                                    fileName = fileName,
+                                    progressPercent = pct,
+                                    transferredBytes = totalWritten,
+                                    totalBytes = fileSize,
+                                    speedBytesPerSec = speed,
+                                    isSending = false
+                                )
                             }
                         }
                         bos.flush()
                     } finally {
                         try { fos.close() } catch (_: Exception) {}
+                        activeClientSockets.remove(xferId)
+                        activeTransfersState.remove(xferId)
+                    }
+
+                    if (activeTransfersState[xferId]?.isCancelled?.get() == true) {
+                        stopForegroundTransferService()
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        try { targetFile.delete() } catch (_: Exception) {}
+                        httpUploadSessions.remove(xferId)
+                        sendJsonResponse(499, "Client Closed Request", JSONObject().apply {
+                            put("status", "cancelled")
+                        })
+                        return@withContext
                     }
 
                     stopForegroundTransferService()
+                    AuraOverlayManager.getInstance(applicationContext).markTransferComplete(fileName, fileSize)
                     val calculatedSha256 = digest.digest().toHex()
                     val verified = expectedSha256.isEmpty() || calculatedSha256.equals(expectedSha256, ignoreCase = true)
 
@@ -1596,6 +1913,14 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun acceptIncomingTransfer(transferId: String) {
+        val httpDeferred = pendingHttpDecisions.remove(transferId)
+        if (httpDeferred != null) {
+            dbHelper.updateIncomingRequestStatus(transferId, "ACCEPTED")
+            cancelSystemIncomingShareNotification(transferId)
+            httpDeferred.complete(true)
+            return
+        }
+
         val session = activeTransfersState[transferId] ?: return
         if (session.isDeclined.get() || session.isAccepted.getAndSet(true)) return
 
@@ -1641,7 +1966,7 @@ class MainActivity : FlutterActivity() {
             if (!exists()) mkdirs()
         }
 
-        var currentFileOut: FileOutputStream? = null
+        var currentFileOut: OutputStream? = null
         var currentPartFile: File? = null
         var currentFinalFile: File? = null
 
@@ -1681,7 +2006,7 @@ class MainActivity : FlutterActivity() {
 
         // Resume mode or fresh file
         val appendMode = resumeOffset > 0 && currentPartFile.exists()
-        currentFileOut = FileOutputStream(currentPartFile, appendMode)
+        currentFileOut = BufferedOutputStream(FileOutputStream(currentPartFile, appendMode), 2 * 1024 * 1024)
 
         var overallReceived = resumeOffset
         val startTime = System.currentTimeMillis()
@@ -1864,9 +2189,25 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
+
+        if (session.isCancelled.get()) {
+            try { currentFileOut?.close() } catch (_: Exception) {}
+            try { currentPartFile?.delete() } catch (_: Exception) {}
+            stopForegroundTransferService()
+            AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+            sendEvent("transferCancelled", mapOf("transferId" to transferId))
+        }
     }
 
     private fun declineIncomingTransfer(transferId: String) {
+        val httpDeferred = pendingHttpDecisions.remove(transferId)
+        if (httpDeferred != null) {
+            dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
+            cancelSystemIncomingShareNotification(transferId)
+            httpDeferred.complete(false)
+            return
+        }
+
         val session = activeTransfersState.remove(transferId) ?: return
         if (session.isAccepted.get() || session.isDeclined.getAndSet(true)) return
         dbHelper.updateIncomingRequestStatus(transferId, "DECLINED")
@@ -1888,9 +2229,34 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun cancelTransferSession(transferId: String) {
-        activeTransfersState[transferId]?.isCancelled?.set(true)
-        activeClientSockets[transferId]?.close()
+        if (transferId.isNotBlank()) {
+            pendingHttpDecisions.remove(transferId)?.complete(false)
+            activeTransfersState[transferId]?.isCancelled?.set(true)
+            if (AuraQuicNative.isAvailable()) AuraQuicNative.cancel(transferId)
+            try { activeClientSockets.remove(transferId)?.close() } catch (_: Exception) {}
+            try { activeHttpConnections.remove(transferId)?.disconnect() } catch (_: Exception) {}
+            activeTransfersState.remove(transferId)
+            httpUploadSessions.remove(transferId)
+        } else {
+            pendingHttpDecisions.values.forEach { it.complete(false) }
+            pendingHttpDecisions.clear()
+            activeTransfersState.values.forEach { it.isCancelled.set(true) }
+            activeClientSockets.values.forEach { try { it.close() } catch (_: Exception) {} }
+            activeHttpConnections.values.forEach { try { it.disconnect() } catch (_: Exception) {} }
+            activeTransfersState.clear()
+            activeClientSockets.clear()
+            activeHttpConnections.clear()
+            httpUploadSessions.clear()
+        }
         stopForegroundTransferService()
+        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
+        sendEvent("transferCancelled", mapOf(
+            "transferId" to transferId
+        ))
+        sendEvent("transferError", mapOf(
+            "transferId" to transferId,
+            "error" to "Transfer cancelled by user"
+        ))
     }
 
     // ----------------------------------------------------
@@ -1907,7 +2273,17 @@ class MainActivity : FlutterActivity() {
         val savedName = prof["display_name"]
         val senderDisplayName = if (!savedName.isNullOrBlank() && savedName != "AuraDrop User") savedName else deviceName
 
+        val transferSession = activeTransfersState.getOrPut(transferId) {
+            TransferSession(
+                transferId = transferId,
+                socket = Socket(),
+                senderName = senderDisplayName
+            )
+        }
+
         for (fileMap in filesList) {
+            if (transferSession.isCancelled.get()) return false
+
             val uriStr = fileMap["uri"] as? String ?: continue
             val fileName = fileMap["name"] as? String ?: "file"
             val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
@@ -1920,8 +2296,8 @@ class MainActivity : FlutterActivity() {
             val prepUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/prepare-upload")
             val prepConn = (prepUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
-                connectTimeout = 3000
-                readTimeout = 4000
+                connectTimeout = 10000
+                readTimeout = 65000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json")
             }
@@ -1950,11 +2326,112 @@ class MainActivity : FlutterActivity() {
             prepConn.disconnect()
             val prepResp = JSONObject(prepRespStr)
             val token = prepResp.optString("oneTimeToken", "")
+            val peerQuicPort = prepResp.optInt("quicPort", 0)
+            val peerCertFp = prepResp.optString("certFingerprint", "")
 
             sendEvent("dataChannelState", mapOf(
                 "transferId" to transferId,
                 "state" to "READY_TO_TRANSFER"
             ))
+
+            // Attempt High-Performance QUIC Data Plane if remote supports it
+            if (AuraQuicNative.isAvailable() && peerQuicPort > 0 && peerCertFp.isNotEmpty()) {
+                val candidatePath = fileMap["path"] as? String
+                val resolvedFile = when {
+                    !candidatePath.isNullOrEmpty() && File(candidatePath).exists() -> File(candidatePath)
+                    uriStr.startsWith("file://") -> File(Uri.parse(uriStr).path ?: "")
+                    else -> null
+                }
+
+                if (resolvedFile != null && resolvedFile.exists()) {
+                    Log.i(TAG, "Target peer supports QUIC ($targetIp:$peerQuicPort). Sending via QUIC Data Plane...")
+                    startForegroundTransferService("Sending $fileName (QUIC)...", 0)
+                    val startTime = System.currentTimeMillis()
+                    var lastProgressTime = 0L
+
+                    val quicOk = AuraQuicNative.sendFile(
+                        targetIp = targetIp,
+                        targetPort = peerQuicPort,
+                        certFingerprint = peerCertFp,
+                        filePath = resolvedFile.absolutePath,
+                        transferId = transferId,
+                        token = token,
+                        fileName = fileName,
+                        fileSize = fileSize,
+                        expectedSha256 = "",
+                        callback = object : AuraQuicProgressCallback {
+                            override fun onProgress(bytesTransferred: Long, totalBytes: Long, speedMbps: Double): Boolean {
+                                if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
+                                    AuraQuicNative.cancel(transferId)
+                                    return false
+                                }
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || bytesTransferred >= totalBytes) {
+                                    lastProgressTime = now
+                                    val pct = if (totalBytes > 0) ((bytesTransferred.toDouble() / totalBytes.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                    val speedBytes = (speedMbps * 1024.0 * 1024.0 / 8.0).toLong()
+                                    val eta = if (speedBytes > 0) ((totalBytes - bytesTransferred) / speedBytes).toInt() else 0
+
+                                    sendEvent("transferProgress", mapOf(
+                                        "transferId" to transferId,
+                                        "state" to "TRANSFERRING",
+                                        "fileName" to fileName,
+                                        "totalBytes" to totalBytes,
+                                        "transferredBytes" to bytesTransferred,
+                                        "speedBytesPerSec" to speedBytes,
+                                        "etaSeconds" to eta,
+                                        "percentage" to pct
+                                    ))
+
+                                    updateForegroundTransferProgress(pct, "${String.format("%.1f", speedMbps)} MB/s", fileName, bytesTransferred, totalBytes, speedBytes, true)
+                                }
+                                return true
+                            }
+                        }
+                    )
+
+                    if (quicOk) {
+                        Log.i(TAG, "QUIC data plane send succeeded for $fileName!")
+                        val totalDurationSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
+                        val avgSpeed = (fileSize / totalDurationSec).toLong()
+
+                        dbHelper.insertTransfer(mapOf(
+                            "id" to transferId,
+                            "direction" to "sent",
+                            "senderName" to senderDisplayName,
+                            "receiverName" to targetIp,
+                            "fileName" to fileName,
+                            "fileSize" to fileSize,
+                            "status" to "completed",
+                            "sha256" to "",
+                            "localPath" to resolvedFile.absolutePath,
+                            "transportType" to "QUIC_DATAPLANE",
+                            "avgSpeed" to avgSpeed,
+                            "createdAt" to System.currentTimeMillis()
+                        ))
+
+                        sendEvent("transferComplete", mapOf(
+                            "transferId" to transferId,
+                            "fileName" to fileName,
+                            "fileSize" to fileSize,
+                            "verified" to true
+                        ))
+
+                        AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                            transferId = transferId,
+                            fileName = fileName,
+                            progressPercent = 100,
+                            transferredBytes = fileSize,
+                            totalBytes = fileSize,
+                            speedBytesPerSec = avgSpeed,
+                            isSending = true
+                        )
+                        continue
+                    } else {
+                        Log.w(TAG, "QUIC send failed, falling back safely to HTTP/TCP streaming...")
+                    }
+                }
+            }
 
             val uploadUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/upload?transferId=$transferId&token=$token")
             val uploadConn = (uploadUrl.openConnection() as HttpURLConnection).apply {
@@ -1965,7 +2442,7 @@ class MainActivity : FlutterActivity() {
                 if (fileSize > 0) {
                     setFixedLengthStreamingMode(fileSize)
                 } else {
-                    setChunkedStreamingMode(1024 * 1024)
+                    setChunkedStreamingMode(2 * 1024 * 1024)
                 }
                 setRequestProperty("x-transfer-id", transferId)
                 setRequestProperty("x-file-name", fileName)
@@ -1974,49 +2451,66 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
+            activeHttpConnections[transferId] = uploadConn
+
             startForegroundTransferService("Sending $fileName...", 0)
             val startTime = System.currentTimeMillis()
             var lastProgressTime = 0L
             var sentBytes = 0L
-            val buf = ByteArray(1024 * 1024)
+            val buf = ByteArray(2 * 1024 * 1024)
 
             val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
                 ?: throw FileNotFoundException("Could not open URI: $uriStr")
 
-            inputStream.use { fis ->
-                uploadConn.outputStream.use { uos ->
-                    val bos = BufferedOutputStream(uos, 1024 * 1024)
-                    while (sentBytes < fileSize) {
-                        val toRead = Math.min(buf.size.toLong(), fileSize - sentBytes).toInt()
-                        val r = fis.read(buf, 0, toRead)
-                        if (r == -1) break
-                        bos.write(buf, 0, r)
-                        sentBytes += r
+            try {
+                inputStream.use { fis ->
+                    uploadConn.outputStream.use { uos ->
+                        val bos = BufferedOutputStream(uos, 2 * 1024 * 1024)
+                        while (sentBytes < fileSize) {
+                            if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
+                                uploadConn.disconnect()
+                                break
+                            }
+                            val toRead = Math.min(buf.size.toLong(), fileSize - sentBytes).toInt()
+                            val r = fis.read(buf, 0, toRead)
+                            if (r == -1) break
+                            bos.write(buf, 0, r)
+                            sentBytes += r
 
-                        val now = System.currentTimeMillis()
-                        if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || sentBytes == fileSize) {
-                            lastProgressTime = now
-                            val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                            val speed = (sentBytes / elapsedSec).toLong()
-                            val pct = if (fileSize > 0) ((sentBytes.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                            val eta = if (speed > 0) ((fileSize - sentBytes) / speed).toInt() else 0
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || sentBytes == fileSize) {
+                                lastProgressTime = now
+                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                                val speed = (sentBytes / elapsedSec).toLong()
+                                val pct = if (fileSize > 0) ((sentBytes.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                val eta = if (speed > 0) ((fileSize - sentBytes) / speed).toInt() else 0
 
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "TRANSFERRING",
-                                "fileName" to fileName,
-                                "totalBytes" to fileSize,
-                                "transferredBytes" to sentBytes,
-                                "speedBytesPerSec" to speed,
-                                "etaSeconds" to eta,
-                                "percentage" to pct
-                            ))
+                                sendEvent("transferProgress", mapOf(
+                                    "transferId" to transferId,
+                                    "state" to "TRANSFERRING",
+                                    "fileName" to fileName,
+                                    "totalBytes" to fileSize,
+                                    "transferredBytes" to sentBytes,
+                                    "speedBytesPerSec" to speed,
+                                    "etaSeconds" to eta,
+                                    "percentage" to pct
+                                ))
 
-                            updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, sentBytes, fileSize, speed, true)
+                                updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, sentBytes, fileSize, speed, true)
+                            }
                         }
+                        bos.flush()
                     }
-                    bos.flush()
                 }
+            } finally {
+                activeHttpConnections.remove(transferId)
+            }
+
+            if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
+                stopForegroundTransferService()
+                AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                sendEvent("transferCancelled", mapOf("transferId" to transferId))
+                return false
             }
 
             val uploadStatus = uploadConn.responseCode
@@ -2067,7 +2561,7 @@ class MainActivity : FlutterActivity() {
             } catch (e: Exception) {
                 Log.d(TAG, "HTTP upload trial failed, falling back: ${e.message}")
             }
-            if (httpSuccess) {
+            if (httpSuccess || activeTransfersState[transferId]?.isCancelled?.get() == true) {
                 return@launch
             }
 
@@ -2194,8 +2688,8 @@ class MainActivity : FlutterActivity() {
 
                 startForegroundTransferService("Sending files...", 0)
 
-                // Adaptive Chunk Engine (Starts at 512 KB, scales up to 1 MB / 2 MB / 4 MB)
-                var currentChunkSize = 512 * 1024
+                // Turbo High-Speed Chunk Engine (Starts at 1 MB, scales up to 2 MB / 4 MB for 100MB/s wire speed)
+                var currentChunkSize = 1024 * 1024
                 var chunkBuffer = ByteArray(currentChunkSize)
                 var overallSent = 0L
                 val startTime = System.currentTimeMillis()
@@ -2241,9 +2735,9 @@ class MainActivity : FlutterActivity() {
                             val elapsedNow = Math.max(0.1, (System.currentTimeMillis() - startTime) / 1000.0)
                             val currentSpeed = overallSent / elapsedNow
                             val targetChunkSize = when {
-                                currentSpeed > 40 * 1024 * 1024 -> 2 * 1024 * 1024 // 2 MB
-                                currentSpeed > 15 * 1024 * 1024 -> 1024 * 1024     // 1 MB
-                                else -> 512 * 1024                                 // 512 KB
+                                currentSpeed > 50 * 1024 * 1024 -> 4 * 1024 * 1024 // 4 MB
+                                currentSpeed > 15 * 1024 * 1024 -> 2 * 1024 * 1024 // 2 MB
+                                else -> 1024 * 1024                                 // 1 MB
                             }
                             if (targetChunkSize != currentChunkSize) {
                                 currentChunkSize = targetChunkSize
@@ -2303,6 +2797,13 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
+                    if (session.isCancelled.get()) {
+                        stopForegroundTransferService()
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        sendEvent("transferCancelled", mapOf("transferId" to transferId))
+                        return@launch
+                    }
+
                     // Flush socket before ending file
                     output.flush()
 
@@ -2353,6 +2854,13 @@ class MainActivity : FlutterActivity() {
                         "localPath" to uriStr,
                         "transportType" to "LAN_TCP"
                     ))
+                }
+
+                if (session.isCancelled.get()) {
+                    stopForegroundTransferService()
+                    AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                    sendEvent("transferCancelled", mapOf("transferId" to transferId))
+                    return@launch
                 }
 
                 // Send TRANSFER_COMPLETE
@@ -2767,7 +3275,10 @@ class MainActivity : FlutterActivity() {
                 transferredBytes = transferredBytes,
                 totalBytes = totalBytes,
                 speedBytesPerSec = speedBytesPerSec,
-                isSending = isSending
+                isSending = isSending,
+                onCancel = {
+                    cancelTransferSession("")
+                }
             )
         }
     }
@@ -2856,21 +3367,23 @@ class MainActivity : FlutterActivity() {
             if (isPhoto) "1 photo" else firstFileName
         }
 
-        // Display directly on mobile screen over other apps & home screen
-        overlayMgr.showTransferRequestOverlay(
-            transferId = transferId,
-            senderName = nameToShow,
-            fileName = fileSummary,
-            totalBytes = totalBytes,
-            onAccept = {
-                acceptIncomingTransfer(transferId)
-                sendEvent("notificationAccept", mapOf("transferId" to transferId))
-            },
-            onDecline = {
-                declineIncomingTransfer(transferId)
-                sendEvent("notificationDecline", mapOf("transferId" to transferId))
-            }
-        )
+        // Display directly on mobile screen ONLY when outside the app (home screen / lock screen / other apps)
+        if (!isAppInForeground) {
+            overlayMgr.showTransferRequestOverlay(
+                transferId = transferId,
+                senderName = nameToShow,
+                fileName = fileSummary,
+                totalBytes = totalBytes,
+                onAccept = {
+                    acceptIncomingTransfer(transferId)
+                    sendEvent("notificationAccept", mapOf("transferId" to transferId))
+                },
+                onDecline = {
+                    declineIncomingTransfer(transferId)
+                    sendEvent("notificationDecline", mapOf("transferId" to transferId))
+                }
+            )
+        }
     }
 
     private fun cancelSystemIncomingShareNotification(transferId: String) {
@@ -2905,21 +3418,23 @@ class MainActivity : FlutterActivity() {
         ip: String = "",
         avatarPath: String = ""
     ) {
-        // Display sleek floating window directly on mobile screen over other apps, home screen & lock screen
-        AuraOverlayManager.getInstance(this).showNameDropOverlay(
-            peerId = peerId,
-            peerName = peerName,
-            deviceName = deviceName,
-            platform = platform,
-            ip = ip,
-            avatarPath = avatarPath,
-            onShare = {
-                sendEvent("peerSelected", mapOf("peerId" to peerId))
-            },
-            onChat = {
-                sendEvent("openChatWithPeer", mapOf("peerId" to peerId))
-            }
-        )
+        // Display sleek floating window directly on mobile screen ONLY over other apps, home screen & lock screen
+        if (!isAppInForeground) {
+            AuraOverlayManager.getInstance(this).showNameDropOverlay(
+                peerId = peerId,
+                peerName = peerName,
+                deviceName = deviceName,
+                platform = platform,
+                ip = ip,
+                avatarPath = avatarPath,
+                onShare = {
+                    sendEvent("peerSelected", mapOf("peerId" to peerId))
+                },
+                onChat = {
+                    sendEvent("openChatWithPeer", mapOf("peerId" to peerId))
+                }
+            )
+        }
     }
 
     override fun onDestroy() {
@@ -2927,6 +3442,9 @@ class MainActivity : FlutterActivity() {
         stopDiscoveryEngine()
         scope.cancel()
         transferServer?.close()
+        if (AuraQuicNative.isAvailable()) {
+            AuraQuicNative.shutdown()
+        }
         dbHelper.close()
         super.onDestroy()
     }

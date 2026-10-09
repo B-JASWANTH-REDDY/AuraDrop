@@ -11,6 +11,8 @@ import { DirectIpModal } from './components/DirectIpModal';
 import { ChatModal } from './components/ChatModal';
 import { ChatHubModal } from './components/ChatHubModal';
 import { UpdateModal } from './components/UpdateModal';
+import { SettingsAndAboutModal, TabKey } from './components/SettingsAndAboutModal';
+import logoImg from './assets/logo.png';
 import {
   Send,
   FolderOpen,
@@ -22,6 +24,7 @@ import {
   Target,
   MessageSquare,
   ArrowUpCircle,
+  Coffee,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -36,6 +39,8 @@ export const App: React.FC = () => {
   const [showDirectIp, setShowDirectIp] = useState(false);
   const [showChatHub, setShowChatHub] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<TabKey>('general');
   const [isPickingFiles, setIsPickingFiles] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
 
@@ -154,6 +159,13 @@ export const App: React.FC = () => {
     invoke('open_file', { fileName }).catch(console.error);
   };
 
+  const handleCancelTransfer = () => {
+    if (activeTransfer) {
+      invoke('cancel_transfer', { transferId: activeTransfer.transferId }).catch(console.error);
+    }
+    setActiveTransfer(null);
+  };
+
   const handleSaveDeviceName = (name: string) => {
     invoke('set_device_name', { name })
       .then(() => {
@@ -169,10 +181,19 @@ export const App: React.FC = () => {
     <div className="flex flex-col h-screen w-screen bg-[#000000] text-white overflow-hidden select-none font-sans">
       {/* Top Navigation Bar - Minimal Black and White */}
       <header className="h-14 border-b border-white/10 px-6 flex items-center justify-between bg-black/90 backdrop-blur-md z-20 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-white text-black flex items-center justify-center shadow-lg shadow-white/5">
-            <Sparkles className="w-4 h-4 text-black" />
-          </div>
+        <div
+          onClick={() => {
+            setSettingsInitialTab('about');
+            setShowSettingsModal(true);
+          }}
+          className="flex items-center gap-3 cursor-pointer hover:opacity-90 transition-opacity"
+          title="About AuraDrop"
+        >
+          <img
+            src={logoImg}
+            alt="AuraDrop"
+            className="w-8 h-8 rounded-xl object-contain shadow-lg shadow-white/10"
+          />
           <div>
             <h1 className="text-sm font-bold tracking-tight text-white flex items-center gap-2">
               AuraDrop
@@ -255,8 +276,22 @@ export const App: React.FC = () => {
           </button>
 
           <button
-            onClick={() => setShowDiagnostics(true)}
-            title="Network Diagnostics & Settings"
+            onClick={() => {
+              setSettingsInitialTab('coffee');
+              setShowSettingsModal(true);
+            }}
+            title="Buy Me a Coffee (Support AuraDrop)"
+            className="p-2 text-[#FFDD00] hover:text-[#FFE333] rounded-lg hover:bg-white/5 transition-colors"
+          >
+            <Coffee className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={() => {
+              setSettingsInitialTab('general');
+              setShowSettingsModal(true);
+            }}
+            title="AuraDrop Settings & Telemetry"
             className="p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
           >
             <Settings className="w-4 h-4" />
@@ -265,7 +300,7 @@ export const App: React.FC = () => {
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col justify-between p-4 overflow-y-auto relative bg-[#000000]">
+      <main className="flex-1 flex flex-col justify-between p-4 overflow-hidden relative bg-[#000000]">
         {/* Central Monochromatic 3D HeroGlobe Viewport */}
         <div className="flex-1 flex flex-col items-center justify-center my-auto relative">
           <HeroGlobe
@@ -278,7 +313,7 @@ export const App: React.FC = () => {
                 ? `${activeTransfer.speedMbps.toFixed(1)} MB/s`
                 : null
             }
-            size={500}
+            size={350}
           />
 
           {/* Quick Action Bar under Globe */}
@@ -323,6 +358,7 @@ export const App: React.FC = () => {
       <TransferModal
         transfer={activeTransfer}
         onDismiss={() => setActiveTransfer(null)}
+        onCancel={handleCancelTransfer}
         onOpenFolder={handleOpenDownloads}
         onOpenFile={handleOpenFile}
       />
@@ -373,6 +409,18 @@ export const App: React.FC = () => {
           onOpenFile={handleOpenFile}
           onClearHistory={() => setHistory([])}
           onClose={() => setShowHistory(false)}
+        />
+      )}
+
+      {showSettingsModal && (
+        <SettingsAndAboutModal
+          isOpen={showSettingsModal}
+          initialTab={settingsInitialTab}
+          onDismiss={() => setShowSettingsModal(false)}
+          info={localInfo}
+          onSaveName={handleSaveDeviceName}
+          history={history}
+          onClearHistory={() => setHistory([])}
         />
       )}
     </div>

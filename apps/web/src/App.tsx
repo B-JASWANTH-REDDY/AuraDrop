@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GitHubStarBar } from './components/GitHubStarBar';
 import { FloatingSideRail, ActiveTab } from './components/FloatingSideRail';
 import { HeroGlobe } from './components/HeroGlobe';
 import { DockedShareTray } from './components/DockedShareTray';
@@ -230,10 +229,7 @@ export const App: React.FC = () => {
         userSelect: 'none',
       }}
     >
-      {/* 1. TOP GITHUB STAR BANNER (Restored from 8dabf0c) */}
-      <GitHubStarBar />
-
-      {/* 2. DRAG & DROP OVERLAY (Apple Minimal Monochrome) */}
+      {/* 1. DRAG & DROP OVERLAY (Apple Minimal Monochrome) */}
       {isDraggingOver && (
         <div
           style={{

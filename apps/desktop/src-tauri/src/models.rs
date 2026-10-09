@@ -82,7 +82,8 @@ pub struct DiscoveryPacket {
 #[serde(rename_all = "camelCase")]
 pub struct PrepareUploadRequest {
     pub transfer_id: String,
-    pub file_id: String,
+    #[serde(default)]
+    pub file_id: Option<String>,
     pub file_name: String,
     pub file_size: u64,
     pub sha256: String,
@@ -90,6 +91,10 @@ pub struct PrepareUploadRequest {
     #[serde(default, alias = "senderName")]
     pub sender_name: Option<String>,
     pub receiver_user_id: Option<String>,
+    #[serde(default)]
+    pub supported_protocols: Option<Vec<String>>,
+    #[serde(default)]
+    pub client_quic_port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +106,10 @@ pub struct PrepareUploadResponse {
     pub one_time_token: String,
     pub expires_at: i64,
     pub protocol: String,
+    #[serde(default)]
+    pub quic_port: Option<u16>,
+    #[serde(default)]
+    pub cert_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

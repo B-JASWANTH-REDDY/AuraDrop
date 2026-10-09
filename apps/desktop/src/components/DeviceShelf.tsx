@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { PeerDevice } from '../types';
-import { ArrowUpRight, CheckCircle2, RefreshCw, PlusCircle, MessageSquare } from 'lucide-react';
+import { ArrowUpRight, CheckCircle2, RefreshCw, PlusCircle, MessageSquare, Star } from 'lucide-react';
 
 interface DeviceShelfProps {
   peers: PeerDevice[];
@@ -46,6 +46,28 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
   onAddDirectIp,
   isScanning = false,
 }) => {
+  const [savedPeerIds, setSavedPeerIds] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('auradrop_saved_peers');
+      if (stored) return JSON.parse(stored);
+    } catch (_) {}
+    return [];
+  });
+
+  const toggleSavePeer = (e: React.MouseEvent, peer: PeerDevice) => {
+    e.stopPropagation();
+    setSavedPeerIds((prev) => {
+      const isSaved = prev.includes(peer.id) || prev.includes(peer.ip);
+      const next = isSaved
+        ? prev.filter((id) => id !== peer.id && id !== peer.ip)
+        : [...prev, peer.id];
+      try {
+        localStorage.setItem('auradrop_saved_peers', JSON.stringify(next));
+      } catch (_) {}
+      return next;
+    });
+  };
+
   const getPlatformIcon = (platform: string) => {
     const p = platform.toLowerCase();
     if (p.includes('android') || p.includes('ios') || p.includes('phone') || p.includes('mobile')) {
@@ -56,23 +78,23 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
 
   if (peers.length === 0) {
     return (
-      <div className="w-full max-w-xl mx-auto p-6 rounded-3xl bg-neutral-950/70 border border-white/10 text-center backdrop-blur-2xl shadow-[0_16px_40px_rgba(0,0,0,0.6)]">
-        <div className="inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-white/10 text-white mb-3 border border-white/15">
-          <HardwarePhoneIcon className="w-6 h-6 animate-pulse" />
+      <div className="w-full max-w-xl mx-auto py-3.5 px-6 rounded-2xl bg-neutral-950/80 border border-white/10 text-center backdrop-blur-2xl shadow-[0_16px_40px_rgba(0,0,0,0.6)]">
+        <div className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-white/10 text-white mb-2 border border-white/15">
+          <HardwarePhoneIcon className="w-4 h-4 animate-pulse" />
         </div>
-        <h4 className="text-sm font-bold text-white tracking-wide">Listening for Nearby Devices</h4>
-        <p className="text-xs text-neutral-400 mt-1.5 max-w-sm mx-auto leading-relaxed">
+        <h4 className="text-xs font-bold text-white tracking-wide">Listening for Nearby Devices</h4>
+        <p className="text-[11px] text-neutral-400 mt-1 max-w-sm mx-auto leading-relaxed">
           Open AuraDrop on your Android phone or nearby PC on this Wi-Fi network. Real devices appear automatically.
         </p>
 
-        <div className="mt-5 flex items-center justify-center gap-3">
+        <div className="mt-3 flex items-center justify-center gap-3">
           {onScanSubnet && (
             <button
               onClick={onScanSubnet}
               disabled={isScanning}
-              className="px-4 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-2 transition-all shadow-lg active:scale-95 disabled:opacity-50"
+              className="px-3.5 py-2 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-bold flex items-center gap-2 transition-all shadow-lg active:scale-95 disabled:opacity-50"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
               {isScanning ? 'Sweeping Subnet...' : 'Scan Subnet Now'}
             </button>
           )}
@@ -80,9 +102,9 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
           {onAddDirectIp && (
             <button
               onClick={onAddDirectIp}
-              className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white border border-white/15 text-xs font-semibold flex items-center gap-2 transition-all active:scale-95 backdrop-blur-md"
+              className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white border border-white/15 text-xs font-semibold flex items-center gap-2 transition-all active:scale-95 backdrop-blur-md"
             >
-              <PlusCircle className="w-3.5 h-3.5" />
+              <PlusCircle className="w-3 h-3" />
               Direct IP Connect
             </button>
           )}
@@ -119,8 +141,14 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
         {peers
           .filter((peer, index, self) => index === self.findIndex((p) => p.ip === peer.ip || p.id === peer.id))
+          .sort((a, b) => {
+            const aSaved = savedPeerIds.includes(a.id) || savedPeerIds.includes(a.ip) ? 1 : 0;
+            const bSaved = savedPeerIds.includes(b.id) || savedPeerIds.includes(b.ip) ? 1 : 0;
+            return bSaved - aSaved;
+          })
           .map((peer) => {
             const isSelected = selectedPeerId === peer.id;
+            const isSaved = savedPeerIds.includes(peer.id) || savedPeerIds.includes(peer.ip);
             return (
               <div
                 key={peer.id}
@@ -147,20 +175,32 @@ export const DeviceShelf: React.FC<DeviceShelfProps> = ({
                       )}
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-white group-hover:text-white transition-colors">
-                        {peer.name}
-                      </h4>
+                      <div className="flex items-center gap-1.5">
+                        <h4 className="text-sm font-bold text-white group-hover:text-white transition-colors">
+                          {peer.name}
+                        </h4>
+                        {isSaved && <span className="text-[10px] text-amber-400 font-bold">★</span>}
+                      </div>
                       <p className="text-[11px] text-neutral-400 mt-0.5 font-mono">
                         {peer.ip}
                       </p>
                     </div>
                   </div>
 
-                  {isSelected ? (
-                    <CheckCircle2 className="w-4 h-4 text-white" />
-                  ) : (
-                    <div className="w-2 h-2 rounded-full bg-white/60" />
-                  )}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={(e) => toggleSavePeer(e, peer)}
+                      title={isSaved ? "Remove from saved devices" : "Save this device"}
+                      className="p-1 rounded-lg hover:bg-white/10 transition-colors"
+                    >
+                      <Star className={`w-3.5 h-3.5 ${isSaved ? 'text-amber-400 fill-amber-400' : 'text-neutral-500 hover:text-white'}`} />
+                    </button>
+                    {isSelected ? (
+                      <CheckCircle2 className="w-4 h-4 text-white" />
+                    ) : (
+                      <div className="w-2 h-2 rounded-full bg-white/60" />
+                    )}
+                  </div>
                 </div>
 
                 <div className="mt-3.5 pt-3 border-t border-white/10 flex items-center justify-between">

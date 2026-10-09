@@ -232,10 +232,39 @@ export const SettingsModal: React.FC<{
 
         <div style={{ borderTop: '1px solid #1C1C1E', paddingTop: '16px' }}>
           <div style={{ fontSize: '13px', fontWeight: 700, color: '#8E8E93', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Android Native Companion
+            Support AuraDrop
           </div>
           <p style={{ fontSize: '12px', color: '#8E8E93', lineHeight: '1.5', marginBottom: '12px' }}>
-            Connect this desktop web browser to your Android device with zero cloud upload.
+            AuraDrop is 100% free and open-source with zero cloud tracking. Support continuous development by buying a coffee.
+          </p>
+          <a
+            href="https://buymeacoffee.com/auradrop"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              background: '#FFDD00',
+              color: '#000000',
+              textDecoration: 'none',
+              padding: '12px 20px',
+              borderRadius: '14px',
+              fontSize: '13px',
+              fontWeight: 800,
+            }}
+          >
+            ☕ Buy Me a Coffee (buymeacoffee.com/auradrop)
+          </a>
+        </div>
+
+        <div style={{ borderTop: '1px solid #1C1C1E', paddingTop: '16px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#8E8E93', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Native Apps & Companion
+          </div>
+          <p style={{ fontSize: '12px', color: '#8E8E93', lineHeight: '1.5', marginBottom: '12px' }}>
+            Connect this desktop web browser to your Android phone or Windows PC with zero cloud upload.
           </p>
           <a
             href="https://github.com/JACK-AI7/AuraDrop/releases"
@@ -250,13 +279,33 @@ export const SettingsModal: React.FC<{
               color: '#000000',
               textDecoration: 'none',
               padding: '12px 20px',
-              borderRadius: '16px',
+              borderRadius: '14px',
               fontSize: '13px',
               fontWeight: 800,
             }}
           >
-            Download AuraDrop Android APK
+            Download AuraDrop Releases (Android APK & Windows EXE)
           </a>
+        </div>
+
+        <div style={{ borderTop: '1px solid #1C1C1E', paddingTop: '16px' }}>
+          <div style={{ fontSize: '13px', fontWeight: 700, color: '#8E8E93', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+            Legal & Compliance (v2.0.1)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
+            <div style={{ padding: '12px', background: '#101012', border: '1px solid #202024', borderRadius: '12px' }}>
+              <div style={{ fontWeight: 700, color: '#FFFFFF', marginBottom: '4px' }}>Zero-Cloud Privacy Policy</div>
+              <div style={{ color: '#8E8E93', lineHeight: '1.4' }}>
+                Files move directly between devices over local Wi-Fi / LAN sockets on port 53317. No files, logs, or analytics are ever uploaded to cloud servers.
+              </div>
+            </div>
+            <div style={{ padding: '12px', background: '#101012', border: '1px solid #202024', borderRadius: '12px' }}>
+              <div style={{ fontWeight: 700, color: '#FFFFFF', marginBottom: '4px' }}>Terms of Service & EULA</div>
+              <div style={{ color: '#8E8E93', lineHeight: '1.4' }}>
+                Provided &quot;as is&quot; under the MIT License. Users are solely responsible for local transfers. Free for personal and commercial use.
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </ModalWrapper>

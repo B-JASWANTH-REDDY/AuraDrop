@@ -282,6 +282,33 @@ class NativeBridgeService {
     }
   }
 
+  static Future<bool> checkBatteryOptimizationExempt() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('checkBatteryOptimizationExempt');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> requestBatteryOptimizationExempt() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('requestBatteryOptimizationExempt');
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> requestAllBackgroundPermissions() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('requestBackgroundPermissions');
+    } catch (_) {}
+  }
+
   static Future<bool> openFile(String filePath) async {
     if (Platform.isWindows) {
       try {
@@ -313,6 +340,38 @@ class NativeBridgeService {
 
     try {
       final bool? ok = await _channel.invokeMethod<bool>('openFile', {'filePath': filePath});
+      return ok ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> openUrl(String url) async {
+    if (Platform.isWindows) {
+      try {
+        await Process.run('cmd.exe', ['/c', 'start', '', url]);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    } else if (Platform.isMacOS) {
+      try {
+        await Process.run('open', [url]);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    } else if (Platform.isLinux) {
+      try {
+        await Process.run('xdg-open', [url]);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    try {
+      final bool? ok = await _channel.invokeMethod<bool>('openUrl', {'url': url});
       return ok ?? false;
     } catch (_) {
       return false;

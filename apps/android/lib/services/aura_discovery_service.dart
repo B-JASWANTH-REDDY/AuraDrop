@@ -24,6 +24,7 @@ class AuraDiscoveryService {
   int _lastBroadcastTimeMs = 0;
   String _activeInterfaceName = 'Detecting...';
   String _activePhysicalIp = '127.0.0.1';
+  final Set<String> _localIps = {'127.0.0.1'};
 
   final HttpClient _httpClient = HttpClient()
     ..connectionTimeout = const Duration(milliseconds: 600)
@@ -161,6 +162,7 @@ class AuraDiscoveryService {
           // Compute directed subnet broadcast (standard /24: a.b.c.255)
           final parts = ip.split('.');
           if (parts.length == 4) {
+            _localIps.add(ip);
             final directedBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
             targets.add({
               'iface': iface.name,
@@ -264,8 +266,10 @@ class AuraDiscoveryService {
       final myHost = int.tryParse(parts[3]) ?? -1;
 
       for (int h = 1; h <= 254; h++) {
-        if (h == myHost) continue; // Skip self
         final hostIp = '$prefix.$h';
+        if (h == myHost || _localIps.contains(hostIp) || hostIp == _activePhysicalIp) {
+          continue; // Skip self
+        }
 
         // 1. Direct UDP Announce Unicast
         if (_socket != null) {
@@ -281,6 +285,9 @@ class AuraDiscoveryService {
   }
 
   Future<void> _probeHostHttp(String hostIp) async {
+    if (_localIps.contains(hostIp) || hostIp == _activePhysicalIp || hostIp == '127.0.0.1') {
+      return;
+    }
     try {
       final uri = Uri.parse('http://$hostIp:$discoveryPort/api/auradrop/v1/ping');
       final req = await _httpClient.getUrl(uri).timeout(const Duration(milliseconds: 500));
@@ -425,8 +432,14 @@ class AuraDiscoveryService {
       final peerIp = datagram.address.address;
       final type = data['type']?.toString() ?? 'ANNOUNCE';
 
-      // Avoid self loopback
-      if (peerIp == _activePhysicalIp && peerId == selfId) return;
+      // Strictly avoid self loopback, packets from own physical interfaces or loopback
+      if (_localIps.contains(peerIp) ||
+          peerIp == _activePhysicalIp ||
+          peerIp == '127.0.0.1' ||
+          datagram.address.isLoopback ||
+          peerId == selfId) {
+        return;
+      }
 
       final isTrusted = AuraIdentityService().isDeviceTrusted(peerId);
 

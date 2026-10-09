@@ -6,8 +6,8 @@ pub mod network;
 pub mod transfer;
 
 use commands::{
-    check_for_updates, get_all_chat_conversations, get_chat_history, get_local_info,
-    get_nearby_peers, open_downloads_folder, open_file, pick_files, probe_device_ip,
+    cancel_transfer, check_for_updates, get_all_chat_conversations, get_chat_history, get_local_info,
+    get_nearby_peers, open_downloads_folder, open_file, open_url, pick_files, probe_device_ip,
     rescan_network, send_chat_message, send_files_to_peer, set_device_name, show_file_in_folder,
     AppState,
 };
@@ -70,6 +70,7 @@ pub fn run() {
             get_nearby_peers,
             pick_files,
             send_files_to_peer,
+            cancel_transfer,
             open_downloads_folder,
             rescan_network,
             probe_device_ip,
@@ -78,7 +79,8 @@ pub fn run() {
             get_all_chat_conversations,
             check_for_updates,
             show_file_in_folder,
-            open_file
+            open_file,
+            open_url
         ])
         .run(tauri::generate_context!());
 

@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -46,6 +47,9 @@ class AuraOverlayManager private constructor(private val context: Context) {
     private var autoDismissRunnable: Runnable? = null
     private var activeTransferId: String? = null
 
+    @Volatile
+    var isAppInForeground: Boolean = false
+
     fun canDrawOverlays(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             Settings.canDrawOverlays(context)
@@ -82,6 +86,17 @@ class AuraOverlayManager private constructor(private val context: Context) {
         }
     }
 
+    fun playNotificationTone() {
+        try {
+            val notificationUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
+            val ringtone = RingtoneManager.getRingtone(context, notificationUri)
+            ringtone?.play()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to play notification tone: ${e.message}")
+        }
+    }
+
     fun showNameDropOverlay(
         peerId: String = "",
         peerName: String,
@@ -94,6 +109,11 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
+            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
+            if (isAppInForeground) {
+                Log.d(TAG, "App is in foreground - skipping floating NameDrop overlay")
+                return@post
+            }
             if (!canDrawOverlays()) {
                 Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
                 return@post
@@ -129,8 +149,8 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 tvSubtitle.text = "$peerName • $platformDisplay"
                 tvStatusBadge.text = if (ip.isNotBlank()) "$ip • 24/7 LAN Proximity" else "Direct Wi-Fi • Ready"
                 
-                // Hardware Vector Icon (Laptop for Windows/Desktop, Smartphone for Android)
-                ivDeviceIcon.setImageResource(if (isWindows) R.drawable.ic_device_laptop else R.drawable.ic_device_phone)
+                // AuraDrop Official Badge Icon
+                ivDeviceIcon.setImageResource(R.drawable.ic_auradrop_badge)
 
                 // Load custom profile avatar if available
                 if (avatarPath.isNotBlank()) {
@@ -191,12 +211,18 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
+            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
+            if (isAppInForeground) {
+                Log.d(TAG, "App is in foreground - skipping floating TransferRequest overlay")
+                return@post
+            }
             if (!canDrawOverlays()) {
                 Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
                 return@post
             }
 
             wakeScreenBriefly()
+            playNotificationTone()
 
             try {
                 val inflater = LayoutInflater.from(context)
@@ -219,11 +245,12 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 progressContainer.visibility = View.GONE
                 btnChat.visibility = View.GONE // For transfer request, only Decline / Accept
 
-                ivDeviceIcon.setImageResource(R.drawable.ic_device_laptop)
+                // Use official AuraDrop badge icon instead of generic arcs
+                ivDeviceIcon.setImageResource(R.drawable.ic_auradrop_badge)
 
-                tvTitle.text = "AuraDrop Request"
-                tvSubtitle.text = "$senderName wants to send $fileName"
-                tvStatusBadge.text = "${formatBytes(totalBytes)} • Direct LAN"
+                tvTitle.text = "AirDrop"
+                tvSubtitle.text = "$senderName would like to share \"$fileName\""
+                tvStatusBadge.text = "${formatBytes(totalBytes)} • Direct Wi-Fi"
                 tvBtnDecline.text = "Decline"
                 tvBtnAccept.text = "Accept"
 
@@ -250,16 +277,87 @@ class AuraOverlayManager private constructor(private val context: Context) {
                 btnAccept.setOnClickListener {
                     onAccept()
                     launchApp()
-                    // Keep overlay alive to show progress
                 }
 
                 pillCard.setOnClickListener {
                     launchApp()
                 }
 
-                addAndAnimateView(view, pillCard, autoDismissDelay = 50000L)
+                // autoDismissDelay = 0L: Persistent on lock screen and over other apps until user touches Accept or Decline
+                addAndAnimateView(view, pillCard, autoDismissDelay = 0L)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to show transfer request overlay: ${e.message}")
+            }
+        }
+    }
+
+    fun showChatMessageOverlay(
+        peerId: String,
+        senderName: String,
+        messageText: String,
+        onOpenChat: (() -> Unit)? = null
+    ) {
+        mainHandler.post {
+            dismissCurrentOverlay()
+            if (isAppInForeground) {
+                return@post
+            }
+            if (!canDrawOverlays()) {
+                return@post
+            }
+
+            wakeScreenBriefly()
+            playNotificationTone()
+
+            try {
+                val inflater = LayoutInflater.from(context)
+                val view = inflater.inflate(R.layout.view_floating_dynamic_island, null)
+
+                val tvTitle = view.findViewById<TextView>(R.id.tv_title)
+                val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                val ivDeviceIcon = view.findViewById<ImageView>(R.id.iv_device_icon)
+                val btnDecline = view.findViewById<View>(R.id.btn_decline_container)
+                val btnChat = view.findViewById<View>(R.id.btn_chat_container)
+                val btnAccept = view.findViewById<View>(R.id.btn_accept_container)
+                val tvBtnDecline = view.findViewById<TextView>(R.id.tv_btn_decline)
+                val tvBtnChat = view.findViewById<TextView>(R.id.tv_btn_chat)
+                val tvBtnAccept = view.findViewById<TextView>(R.id.tv_btn_accept)
+                val pillCard = view.findViewById<View>(R.id.pill_card_container)
+                val progressContainer = view.findViewById<View>(R.id.transfer_progress_container)
+
+                progressContainer.visibility = View.GONE
+                btnChat.visibility = View.GONE
+                btnAccept.visibility = View.VISIBLE
+
+                ivDeviceIcon.setImageResource(R.drawable.ic_auradrop_badge)
+                tvTitle.text = "AuraDrop Message"
+                val displayText = if (messageText.startsWith("data:image/") || messageText.startsWith("[FILE_IMAGE]")) "Sent a photo" else messageText
+                tvSubtitle.text = "$senderName: $displayText"
+                tvStatusBadge.text = "Direct LAN • Chat"
+
+                tvBtnDecline.text = "Dismiss"
+                tvBtnAccept.text = "Open Chat"
+
+                btnDecline.setOnClickListener {
+                    dismissCurrentOverlay()
+                }
+
+                btnAccept.setOnClickListener {
+                    onOpenChat?.invoke()
+                    launchApp()
+                    dismissCurrentOverlay()
+                }
+
+                pillCard.setOnClickListener {
+                    onOpenChat?.invoke()
+                    launchApp()
+                    dismissCurrentOverlay()
+                }
+
+                addAndAnimateView(view, pillCard, autoDismissDelay = 8000L)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to show chat message overlay: ${e.message}")
             }
         }
     }
@@ -275,6 +373,11 @@ class AuraOverlayManager private constructor(private val context: Context) {
         onCancel: (() -> Unit)? = null
     ) {
         mainHandler.post {
+            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
+            if (isAppInForeground) {
+                dismissCurrentOverlay()
+                return@post
+            }
             if (!canDrawOverlays()) return@post
 
             val view = currentOverlayView
@@ -296,9 +399,9 @@ class AuraOverlayManager private constructor(private val context: Context) {
                     btnChat.visibility = View.GONE
                     btnAccept.visibility = View.GONE
 
-                    tvTitle.text = if (isSending) "Sending via AuraDrop..." else "Receiving via AuraDrop..."
+                    tvTitle.text = if (isSending) "AirDrop Sending..." else "AirDrop Receiving..."
                     tvSubtitle.text = fileName
-                    tvStatusBadge.text = "⚡ Direct LAN Transfer"
+                    tvStatusBadge.text = "Direct Wi-Fi"
 
                     pbTransfer.progress = progressPercent.coerceIn(0, 100)
                     tvStats.text = "${formatBytes(transferredBytes)} / ${formatBytes(totalBytes)} • $progressPercent%"
@@ -337,14 +440,14 @@ class AuraOverlayManager private constructor(private val context: Context) {
                     val tvBtnDecline = newView.findViewById<TextView>(R.id.tv_btn_decline)
                     val pillCard = newView.findViewById<View>(R.id.pill_card_container)
 
-                    ivDeviceIcon.setImageResource(R.drawable.ic_device_laptop)
+                    ivDeviceIcon.setImageResource(R.drawable.ic_auradrop_badge)
                     progressContainer.visibility = View.VISIBLE
                     btnChat.visibility = View.GONE
                     btnAccept.visibility = View.GONE
 
-                    tvTitle.text = if (isSending) "Sending via AuraDrop..." else "Receiving via AuraDrop..."
+                    tvTitle.text = if (isSending) "AirDrop Sending..." else "AirDrop Receiving..."
                     tvSubtitle.text = fileName
-                    tvStatusBadge.text = "⚡ Direct LAN Transfer"
+                    tvStatusBadge.text = "Direct Wi-Fi"
 
                     pbTransfer.progress = progressPercent.coerceIn(0, 100)
                     tvStats.text = "${formatBytes(transferredBytes)} / ${formatBytes(totalBytes)} • $progressPercent%"
@@ -371,6 +474,10 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
     fun markTransferComplete(fileName: String, totalBytes: Long) {
         mainHandler.post {
+            if (isAppInForeground) {
+                dismissCurrentOverlay()
+                return@post
+            }
             val view = currentOverlayView ?: return@post
             try {
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)
@@ -473,11 +580,13 @@ class AuraOverlayManager private constructor(private val context: Context) {
             start()
         }
 
-        // Auto dismiss timer
-        autoDismissRunnable = Runnable {
-            dismissCurrentOverlay()
+        // Auto dismiss timer (0L means persistent on screen until touched)
+        if (autoDismissDelay > 0L) {
+            autoDismissRunnable = Runnable {
+                dismissCurrentOverlay()
+            }
+            mainHandler.postDelayed(autoDismissRunnable!!, autoDismissDelay)
         }
-        mainHandler.postDelayed(autoDismissRunnable!!, autoDismissDelay)
     }
 
     fun dismissCurrentOverlay() {

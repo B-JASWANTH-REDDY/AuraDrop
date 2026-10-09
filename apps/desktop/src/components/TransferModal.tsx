@@ -5,6 +5,7 @@ import { ArrowDownLeft, ArrowUpRight, CheckCircle2, AlertCircle, FileText, X } f
 interface TransferModalProps {
   transfer: TransferProgressPayload | null;
   onDismiss: () => void;
+  onCancel?: () => void;
   onOpenFolder: () => void;
   onOpenFile?: (fileName: string) => void;
 }
@@ -12,6 +13,7 @@ interface TransferModalProps {
 export const TransferModal: React.FC<TransferModalProps> = ({
   transfer,
   onDismiss,
+  onCancel,
   onOpenFolder,
   onOpenFile,
 }) => {
@@ -31,7 +33,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-fade-in select-none">
       <div className="w-full max-w-md bg-neutral-950/80 border border-white/15 rounded-3xl shadow-[0_24px_64px_rgba(0,0,0,0.8)] backdrop-blur-2xl p-6 relative">
         <button
-          onClick={onDismiss}
+          onClick={!isCompleted && !isFailed && onCancel ? onCancel : onDismiss}
           className="absolute top-4 right-4 p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-white/5 transition-colors"
         >
           <X className="w-4 h-4" />
@@ -143,10 +145,21 @@ export const TransferModal: React.FC<TransferModalProps> = ({
               </button>
             </>
           )}
+
+          {!isCompleted && !isFailed && onCancel && (
+            <button
+              onClick={onCancel}
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 flex items-center justify-center gap-1.5 active:scale-95"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Cancel Transfer</span>
+            </button>
+          )}
+
           <button
             onClick={onDismiss}
             className={`${
-              isCompleted ? 'px-4' : 'flex-1'
+              isCompleted ? 'px-4' : !isFailed ? 'px-4' : 'flex-1'
             } py-2.5 rounded-xl text-xs font-semibold transition-all bg-neutral-900 hover:bg-neutral-800 text-neutral-300 border border-white/15`}
           >
             {isCompleted ? 'Done' : 'Close'}

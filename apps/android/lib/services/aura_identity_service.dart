@@ -70,6 +70,16 @@ class AuraIdentityService {
     await _loadTrustedDevices();
   }
 
+  void syncWithNative({String? deviceId, String? deviceName}) {
+    if (deviceId != null && deviceId.trim().isNotEmpty) {
+      _deviceId = deviceId.trim();
+    }
+    if (deviceName != null && deviceName.trim().isNotEmpty) {
+      _deviceName = deviceName.trim();
+    }
+    _saveIdentity();
+  }
+
   Future<void> updateDeviceName(String newName) async {
     if (newName.trim().isEmpty) return;
     _deviceName = newName.trim();
