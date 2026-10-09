@@ -18,16 +18,62 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 pub const TRANSFER_PORT: u16 = 53317;
+
+/// Sanitizes a filename to prevent path traversal and filesystem incompatibilities.
+pub fn sanitize_filename(name: &str) -> String {
+    let clean = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'], "_");
+    let parts: Vec<&str> = clean.split('.').filter(|s| *s != ".." && *s != ".").collect();
+    let sanitized = parts.join(".");
+    let trimmed = sanitized.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "received_file".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Resolves a non-colliding destination path in the target directory.
+pub fn resolve_unique_destination(dir: &Path, file_name: &str) -> PathBuf {
+    let safe_name = sanitize_filename(file_name);
+    let mut candidate = dir.join(&safe_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+
+    let stem = Path::new(&safe_name)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+    let ext = Path::new(&safe_name)
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    let mut counter = 1;
+    loop {
+        let new_name = if ext.is_empty() {
+            format!("{} ({})", stem, counter)
+        } else {
+            format!("{} ({}).{}", stem, counter, ext)
+        };
+        candidate = dir.join(new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SessionMetadata {
@@ -38,6 +84,8 @@ pub struct SessionMetadata {
     pub token: String,
     pub expires_at: i64,
     pub sender_name: String,
+    pub sender_id: String,
+    pub is_consumed: bool,
 }
 
 #[derive(Clone)]
@@ -47,7 +95,6 @@ pub struct TransferService {
     chat_history: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
     app_handle: Option<AppHandle>,
     downloads_dir: PathBuf,
-    quic_engine: Arc<RwLock<Option<auradrop_quic::engine::QuicEngine>>>,
 }
 
 impl TransferService {
@@ -64,7 +111,6 @@ impl TransferService {
             chat_history: Arc::new(RwLock::new(HashMap::new())),
             app_handle: None,
             downloads_dir: downloads,
-            quic_engine: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -80,31 +126,7 @@ impl TransferService {
         let service = self.clone();
 
         tauri::async_runtime::spawn(async move {
-            crate::log_debug("[TransferServer] spawn task entered");
-
-            // Start QUIC data plane engine in background
-            let device_name = service.identity.get_device_name().await;
-            let quic_bind_addr: std::net::SocketAddr = "0.0.0.0:53318".parse().unwrap();
-            let quic_res = match auradrop_quic::engine::QuicEngine::start(quic_bind_addr, &device_name).await {
-                Ok(eng) => Ok(eng),
-                Err(_) => {
-                    let fallback_addr: std::net::SocketAddr = "0.0.0.0:0".parse().unwrap();
-                    auradrop_quic::engine::QuicEngine::start(fallback_addr, &device_name).await
-                }
-            };
-
-            match quic_res {
-                Ok(eng) => {
-                    if let Ok(addr) = eng.local_addr() {
-                        crate::log_debug(&format!("[TransferServer] QUIC data plane active on {}", addr));
-                    }
-                    let mut guard = service.quic_engine.write().await;
-                    *guard = Some(eng);
-                }
-                Err(e) => {
-                    crate::log_debug(&format!("[TransferServer] QUIC engine init failed: {}", e));
-                }
-            }
+            crate::log_debug("[TransferServer] spawn task entered - TCP bulk transport mode");
 
             let app = Router::new()
                 .route("/api/auradrop/v1/ping", get(handle_ping))
@@ -149,16 +171,36 @@ impl TransferService {
             return Err("Selected file does not exist".to_string());
         }
 
+        let file_meta = fs::metadata(&path).map_err(|e| e.to_string())?;
+        let file_size = file_meta.len();
         let file_name = path
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "file".to_string());
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
 
-        let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-        let file_size = metadata.len();
-        let transfer_id = format!("xfer_{}", Uuid::new_v4());
+        let my_id = self.identity.get_device_id().await;
+        let my_name = self.identity.get_device_name().await;
+        let transfer_id = Uuid::new_v4().to_string();
 
-        // Emit initial status
+        // Calculate SHA-256 in-flight or streamed for verification
+        let sha256_hash = if file_size <= 500 * 1024 * 1024 {
+            let mut hasher = Sha256::new();
+            if let Ok(mut f) = File::open(&path) {
+                let mut buf = [0u8; 512 * 1024];
+                while let Ok(n) = f.read(&mut buf) {
+                    if n == 0 { break; }
+                    hasher.update(&buf[..n]);
+                }
+                hex::encode(hasher.finalize())
+            } else {
+                format!("stream_{}", transfer_id)
+            }
+        } else {
+            format!("stream_{}", transfer_id)
+        };
+
+        // Emit initial transfer progress
         self.emit_progress(TransferProgressPayload {
             transfer_id: transfer_id.clone(),
             file_name: file_name.clone(),
@@ -175,57 +217,32 @@ impl TransferService {
         })
         .await;
 
-        // Step 1: Compute SHA-256 (only upfront for small files <= 50MB, fast stream hash for multi-GB files so transfer starts immediately)
-        let sha256_hash = if file_size <= 50 * 1024 * 1024 {
-            let mut file = File::open(&path).map_err(|e| e.to_string())?;
-            let mut hasher = Sha256::new();
-            let mut buffer = vec![0u8; 2 * 1024 * 1024];
-            loop {
-                let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&buffer[..n]);
-            }
-            hex::encode(hasher.finalize())
-        } else {
-            // For large files (>50MB), pass streaming verification token to start wire transmission instantly
-            format!("stream_{}_{}", file_size, transfer_id)
-        };
-
-        // Step 2: Prepare upload
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(3600))
             .tcp_nodelay(true)
-            .pool_max_idle_per_host(10)
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
-            .map_err(|e| e.to_string())?;
+            .unwrap_or_default();
 
-        let prepare_url = format!("http://{}:{}/api/auradrop/v1/prepare-upload", peer_ip, peer_port);
-        let my_name = self.identity.get_device_name().await;
-
-        let prep_req = PrepareUploadRequest {
-            transfer_id: transfer_id.clone(),
-            file_id: Some(transfer_id.clone()),
-            file_name: file_name.clone(),
-            file_size,
-            sha256: sha256_hash.clone(),
-            sender_user_id: my_name.clone(),
-            sender_name: Some(my_name.clone()),
-            receiver_user_id: None,
-            supported_protocols: Some(vec!["auradrop/quic/1".to_string(), "auradrop/tcp/1".to_string()]),
-            client_quic_port: None,
-        };
+        // Step 1: Handshake with recipient on /prepare-upload
+        let prep_url = format!("http://{}:{}/api/auradrop/v1/prepare-upload", peer_ip, peer_port);
+        let prep_body = json!({
+            "transferId": transfer_id,
+            "fileName": file_name,
+            "fileSize": file_size,
+            "sha256": sha256_hash,
+            "senderUserId": my_id,
+            "senderName": my_name,
+        });
 
         let prep_res = client
-            .post(&prepare_url)
-            .json(&prep_req)
+            .post(&prep_url)
+            .json(&prep_body)
             .send()
             .await
-            .map_err(|e| format!("Failed to connect to peer at {}: {}", prepare_url, e))?;
+            .map_err(|e| format!("Prepare upload connection failed: {}", e))?;
 
         if !prep_res.status().is_success() {
-            let err = format!("Peer rejected prepare upload: HTTP {}", prep_res.status());
+            let err = format!("Recipient declined or rejected transfer: HTTP {}", prep_res.status());
             self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
             return Err(err);
         }
@@ -233,95 +250,15 @@ impl TransferService {
         let prep_data: PrepareUploadResponse = prep_res
             .json()
             .await
-            .map_err(|e| format!("Invalid prepare response: {}", e))?;
+            .map_err(|e| format!("Failed to parse prepare response: {}", e))?;
 
-        // Step 2.5: Attempt High-Performance QUIC Data Plane if supported by recipient
-        if let (Some(quic_port), Some(cert_fp)) = (prep_data.quic_port, prep_data.cert_fingerprint.as_ref()) {
-            crate::log_debug(&format!("[AuraTransfer] Peer supports QUIC. Attempting QUIC transfer to {}:{}", peer_ip, quic_port));
-            if let Ok(quic_addr) = format!("{}:{}", peer_ip, quic_port).parse::<std::net::SocketAddr>() {
-                let quic_guard = self.quic_engine.read().await;
-                if let Some(ref engine) = *quic_guard {
-                    let header = auradrop_quic::framing::TransferHeader {
-                        transfer_id: transfer_id.clone(),
-                        one_time_token: prep_data.one_time_token.clone(),
-                        file_name: file_name.clone(),
-                        file_size,
-                        expected_sha256: sha256_hash.clone(),
-                        sender_device_id: my_name.clone(),
-                        client_version: "2.0.1".to_string(),
-                    };
-
-                    let self_quic = self.clone();
-                    let tid_q = transfer_id.clone();
-                    let fnm_q = file_name.clone();
-                    let pnm_q = peer_name.clone();
-                    let fp_q = file_path_str.clone();
-
-                    let progress_cb = Arc::new(move |transferred: u64, total: u64, speed: f64| {
-                        let percent = if total > 0 { (transferred as f64 / total as f64) * 100.0 } else { 100.0 };
-                        let remaining = total.saturating_sub(transferred);
-                        let eta = if speed > 0.0 { ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64 } else { 0 };
-
-                        let s = self_quic.clone();
-                        let tid = tid_q.clone();
-                        let fnm = fnm_q.clone();
-                        let pnm = pnm_q.clone();
-                        let fp = fp_q.clone();
-
-                        tauri::async_runtime::spawn(async move {
-                            s.emit_progress(TransferProgressPayload {
-                                transfer_id: tid,
-                                file_name: fnm,
-                                file_size: total,
-                                bytes_transferred: transferred,
-                                progress_percent: percent,
-                                speed_mbps: speed,
-                                eta_seconds: eta,
-                                is_incoming: false,
-                                status: if transferred >= total {
-                                    "completed".to_string()
-                                } else {
-                                    "transferring".to_string()
-                                },
-                                peer_name: pnm,
-                                error: None,
-                                file_path: Some(fp),
-                            }).await;
-                        });
-                        true
-                    });
-
-                    match engine.send_file(quic_addr, cert_fp, &path, header, Some(progress_cb), None).await {
-                        Ok(_) => {
-                            crate::log_debug(&format!("[AuraTransfer] QUIC transfer completed successfully for {}", file_name));
-                            self.emit_progress(TransferProgressPayload {
-                                transfer_id: transfer_id.clone(),
-                                file_name: file_name.clone(),
-                                file_size,
-                                bytes_transferred: file_size,
-                                progress_percent: 100.0,
-                                speed_mbps: 0.0,
-                                eta_seconds: 0,
-                                is_incoming: false,
-                                status: "completed".to_string(),
-                                peer_name: peer_name.clone(),
-                                error: None,
-                                file_path: Some(file_path_str.clone()),
-                            }).await;
-                            return Ok(());
-                        }
-                        Err(quic_err) => {
-                            crate::log_debug(&format!(
-                                "[AuraTransfer] QUIC data plane failed ({}), safely falling back to HTTP/TCP pipeline...",
-                                quic_err
-                            ));
-                        }
-                    }
-                }
-            }
+        if !prep_data.accepted {
+            let err = "Transfer declined by recipient".to_string();
+            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+            return Err(err);
         }
 
-        // Step 3: Stream file bytes with high-speed 1MB chunk pipeline (TCP fallback)
+        // Step 2: Stream file bytes over authenticated TCP with bounded buffer (512 KiB)
         let upload_url = format!(
             "http://{}:{}/api/auradrop/v1/upload?transferId={}&token={}",
             peer_ip, peer_port, transfer_id, prep_data.one_time_token
@@ -338,10 +275,11 @@ impl TransferService {
         let start_time = Instant::now();
         let mut last_emit = Instant::now();
 
-        let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, 2 * 1024 * 1024).map(move |item| {
+        // Bounded 512 KiB streaming chunks
+        let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, 512 * 1024).map(move |item| {
             if let Ok(ref bytes) = item {
                 transferred += bytes.len() as u64;
-                if last_emit.elapsed().as_millis() >= 200 || transferred == file_size {
+                if last_emit.elapsed().as_millis() >= 120 || transferred == file_size {
                     last_emit = Instant::now();
                     let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
                     let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
@@ -397,10 +335,7 @@ impl TransferService {
             .header("x-file-size", file_size.to_string())
             .header("content-length", file_size.to_string())
             .header("x-sha256", &sha256_hash)
-            .header("x-expected-sha256", &sha256_hash)
             .header("x-token", &prep_data.one_time_token)
-            .header("x-one-time-token", &prep_data.one_time_token)
-            .header("x-session-token", &prep_data.one_time_token)
             .body(reqwest::Body::wrap_stream(reader_stream))
             .send()
             .await
@@ -588,10 +523,17 @@ async fn handle_prepare_upload(
     State(service): State<TransferService>,
     Json(payload): Json<PrepareUploadRequest>,
 ) -> Result<Json<PrepareUploadResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let token = Uuid::new_v4().to_string();
-    let expires_at = Utc::now().timestamp_millis() + 60000;
+    if payload.file_name.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Filename must not be empty"})),
+        ));
+    }
 
-    let sender_name = payload.sender_name.unwrap_or(payload.sender_user_id);
+    let token = Uuid::new_v4().to_string();
+    let expires_at = Utc::now().timestamp_millis() + 60000; // 60s TTL
+    let sender_name = payload.sender_name.clone().unwrap_or_else(|| payload.sender_user_id.clone());
+
     let meta = SessionMetadata {
         transfer_id: payload.transfer_id.clone(),
         file_name: payload.file_name.clone(),
@@ -600,6 +542,8 @@ async fn handle_prepare_upload(
         token: token.clone(),
         expires_at,
         sender_name: sender_name.clone(),
+        sender_id: payload.sender_user_id.clone(),
+        is_consumed: false,
     };
 
     service
@@ -608,103 +552,9 @@ async fn handle_prepare_upload(
         .await
         .insert(payload.transfer_id.clone(), meta);
 
-    // Register with QUIC engine if active
-    let (quic_port, cert_fingerprint) = {
-        let guard = service.quic_engine.read().await;
-        if let Some(ref engine) = *guard {
-            let port = engine.local_addr().map(|a| a.port()).ok();
-            let fp = engine.cert_fingerprint().to_string();
-
-            let dest_path = auradrop_quic::framing::resolve_unique_destination(&service.downloads_dir, &payload.file_name);
-
-            let self_s = service.clone();
-            let tid_p = payload.transfer_id.clone();
-            let fnm_p = payload.file_name.clone();
-            let snm_p = sender_name.clone();
-            let dst_p = dest_path.clone();
-
-            let on_progress: Option<auradrop_quic::engine::ProgressCallback> = Some(Arc::new(move |transferred, total, speed| {
-                let percent = if total > 0 { (transferred as f64 / total as f64) * 100.0 } else { 100.0 };
-                let remaining = total.saturating_sub(transferred);
-                let eta = if speed > 0.0 { ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64 } else { 0 };
-
-                let s = self_s.clone();
-                let tid = tid_p.clone();
-                let fnm = fnm_p.clone();
-                let snm = snm_p.clone();
-                let dst = dst_p.clone();
-
-                tauri::async_runtime::spawn(async move {
-                    s.emit_progress(TransferProgressPayload {
-                        transfer_id: tid,
-                        file_name: fnm,
-                        file_size: total,
-                        bytes_transferred: transferred,
-                        progress_percent: percent,
-                        speed_mbps: speed,
-                        eta_seconds: eta,
-                        is_incoming: true,
-                        status: if transferred >= total { "completed".to_string() } else { "transferring".to_string() },
-                        peer_name: snm,
-                        error: None,
-                        file_path: Some(dst.to_string_lossy().to_string()),
-                    }).await;
-                });
-                true
-            }));
-
-            let self_c = service.clone();
-            let tid_c = payload.transfer_id.clone();
-            let fnm_c = payload.file_name.clone();
-            let snm_c = sender_name.clone();
-            let fsz_c = payload.file_size;
-
-            let on_complete: Option<auradrop_quic::engine::CompletionCallback> = Some(Arc::new(move |_t, path| {
-                let s = self_c.clone();
-                let tid = tid_c.clone();
-                let fnm = fnm_c.clone();
-                let snm = snm_c.clone();
-                let p_str = path.to_string_lossy().to_string();
-
-                tauri::async_runtime::spawn(async move {
-                    s.emit_progress(TransferProgressPayload {
-                        transfer_id: tid,
-                        file_name: fnm,
-                        file_size: fsz_c,
-                        bytes_transferred: fsz_c,
-                        progress_percent: 100.0,
-                        speed_mbps: 0.0,
-                        eta_seconds: 0,
-                        is_incoming: true,
-                        status: "completed".to_string(),
-                        peer_name: snm,
-                        error: None,
-                        file_path: Some(p_str),
-                    }).await;
-                });
-            }));
-
-            engine.approve_transfer(auradrop_quic::engine::ApprovedTransfer {
-                transfer_id: payload.transfer_id.clone(),
-                token: token.clone(),
-                file_name: payload.file_name.clone(),
-                file_size: payload.file_size,
-                expected_sha256: payload.sha256.clone(),
-                destination_path: dest_path,
-                expires_at: std::time::Instant::now() + std::time::Duration::from_secs(65),
-                on_progress,
-                on_complete,
-            }).await;
-
-            (port, Some(fp))
-        } else {
-            (None, None)
-        }
-    };
-
     crate::log_debug(&format!(
-        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {}, QUIC port: {:?}",
-        payload.file_name, payload.file_size, sender_name, quic_port
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP]",
+        payload.file_name, payload.file_size, sender_name
     ));
 
     let file_id = payload
@@ -717,9 +567,9 @@ async fn handle_prepare_upload(
         file_id,
         one_time_token: token,
         expires_at,
-        protocol: if quic_port.is_some() { "auradrop/quic/1".to_string() } else { "auradrop/1".to_string() },
-        quic_port,
-        cert_fingerprint,
+        protocol: "auradrop/tcp/1".to_string(),
+        quic_port: None,
+        cert_fingerprint: None,
     }))
 }
 
@@ -736,33 +586,91 @@ async fn handle_upload(
         .or_else(|| params.get("transferId").cloned())
         .unwrap_or_default();
 
-    let session = {
-        let sessions = service.sessions.read().await;
-        sessions.get(&transfer_id).cloned()
-    };
+    let presented_token = headers
+        .get("x-token")
+        .or_else(|| headers.get("x-one-time-token"))
+        .or_else(|| headers.get("x-session-token"))
+        .and_then(|h| h.to_str().ok())
+        .map(|s| s.to_string())
+        .or_else(|| params.get("token").cloned())
+        .unwrap_or_default();
 
-    let session = match session {
-        Some(s) => s,
-        None => {
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "Unknown or expired transfer session"})),
-            ));
+    if transfer_id.is_empty() || presented_token.is_empty() {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Missing transferId or token"})),
+        ));
+    }
+
+    let now_millis = Utc::now().timestamp_millis();
+    let session = {
+        let mut sessions = service.sessions.write().await;
+        match sessions.get_mut(&transfer_id) {
+            Some(s) => {
+                if now_millis > s.expires_at {
+                    sessions.remove(&transfer_id);
+                    return Err((
+                        StatusCode::UNAUTHORIZED,
+                        Json(json!({"error": "Transfer authorization token has expired"})),
+                    ));
+                }
+                if s.is_consumed {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": "Transfer token already consumed (replay rejected)"})),
+                    ));
+                }
+                if s.token != presented_token {
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        Json(json!({"error": "Invalid authorization token for this transfer"})),
+                    ));
+                }
+                // Mark single-use token consumed immediately
+                s.is_consumed = true;
+                s.clone()
+            }
+            None => {
+                return Err((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error": "Unknown or invalid transfer session"})),
+                ));
+            }
         }
     };
 
-    let target_file_path = service.downloads_dir.join(&session.file_name);
-    let raw_file = match File::create(&target_file_path) {
+    // Validate declared file size from headers if provided
+    if let Some(decl_size_str) = headers.get("x-file-size").and_then(|h| h.to_str().ok()) {
+        if let Ok(decl_size) = decl_size_str.parse::<u64>() {
+            if decl_size != session.file_size {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": "Header x-file-size does not match approved transfer metadata"})),
+                ));
+            }
+        }
+    }
+
+    // Resolve final destination with filename sanitization and collision prevention
+    let final_dest = resolve_unique_destination(&service.downloads_dir, &session.file_name);
+    let safe_base_name = sanitize_filename(&session.file_name);
+    let temp_file_path = service
+        .downloads_dir
+        .join(format!(".{}.{}.part", safe_base_name, session.transfer_id));
+
+    // Open temporary file with Tokio async I/O
+    let temp_file = match tokio::fs::File::create(&temp_file_path).await {
         Ok(f) => f,
         Err(e) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Cannot create file: {}", e)})),
+                Json(json!({"error": format!("Cannot initialize temp file on disk: {}", e)})),
             ));
         }
     };
-    let mut file = std::io::BufWriter::with_capacity(2 * 1024 * 1024, raw_file);
 
+    // Bounded buffer for backpressured async disk writing (512 KiB)
+    let mut writer = tokio::io::BufWriter::with_capacity(512 * 1024, temp_file);
     let mut hasher = Sha256::new();
     let mut transferred = 0u64;
     let start_time = Instant::now();
@@ -774,16 +682,19 @@ async fn handle_upload(
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
-                let _ = fs::remove_file(&target_file_path);
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                service.sessions.write().await.remove(&transfer_id);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error": format!("Stream read error: {}", e)})),
+                    Json(json!({"error": format!("TCP stream read error: {}", e)})),
                 ));
             }
         };
 
-        if let Err(e) = file.write_all(&chunk) {
-            let _ = fs::remove_file(&target_file_path);
+        // Write directly with backpressure
+        if let Err(e) = writer.write_all(&chunk).await {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            service.sessions.write().await.remove(&transfer_id);
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error": format!("Disk write error: {}", e)})),
@@ -793,7 +704,17 @@ async fn handle_upload(
         hasher.update(&chunk);
         transferred += chunk.len() as u64;
 
-        if last_emit.elapsed().as_millis() >= 200 || transferred == session.file_size {
+        if transferred > session.file_size {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            service.sessions.write().await.remove(&transfer_id);
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Received byte count exceeded approved file size (oversized payload rejected)"})),
+            ));
+        }
+
+        // Throttled UI progress event (5-10 per second: 120ms interval)
+        if last_emit.elapsed().as_millis() >= 120 || transferred == session.file_size {
             last_emit = Instant::now();
             let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
             let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
@@ -827,7 +748,7 @@ async fn handle_upload(
                     peer_name: session.sender_name.clone(),
                     error: None,
                     file_path: if transferred >= session.file_size {
-                        Some(target_file_path.to_string_lossy().to_string())
+                        Some(final_dest.to_string_lossy().to_string())
                     } else {
                         None
                     },
@@ -836,26 +757,64 @@ async fn handle_upload(
         }
     }
 
-    if let Err(e) = file.flush() {
-        let _ = fs::remove_file(&target_file_path);
+    // Flush and sync buffer to physical disk
+    if let Err(e) = writer.flush().await {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        service.sessions.write().await.remove(&transfer_id);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("Disk write flush error: {}", e)})),
         ));
     }
+    drop(writer);
 
+    // Verify exact length
+    if transferred != session.file_size {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        service.sessions.write().await.remove(&transfer_id);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("Byte count mismatch: received {} bytes, expected {}", transferred, session.file_size)})),
+        ));
+    }
+
+    // Verify SHA-256
     let calculated_hash = hex::encode(hasher.finalize());
-    let verified = session.sha256_expected.is_empty() || calculated_hash.eq_ignore_ascii_case(&session.sha256_expected);
+    let sha_expected = session.sha256_expected.trim();
+    if !sha_expected.is_empty() && !sha_expected.starts_with("stream_") {
+        if !calculated_hash.eq_ignore_ascii_case(sha_expected) {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            service.sessions.write().await.remove(&transfer_id);
+            return Err((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({
+                    "error": "Checksum verification failed: SHA-256 integrity mismatch",
+                    "expected": sha_expected,
+                    "actual": calculated_hash
+                })),
+            ));
+        }
+    }
 
-    // Remove session
+    // Atomic rename from temporary file to final committed path
+    if let Err(e) = tokio::fs::rename(&temp_file_path, &final_dest).await {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        service.sessions.write().await.remove(&transfer_id);
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to atomically commit destination file: {}", e)})),
+        ));
+    }
+
+    // Remove finished session
     service.sessions.write().await.remove(&transfer_id);
 
     crate::log_debug(&format!(
-        "[AuraTransfer] Inbound upload complete: {} ({} bytes) - SHA-256: {} [Verified: {}] -> Saved to {}",
-        session.file_name, session.file_size, calculated_hash, verified, target_file_path.display()
+        "[AuraTransfer] Inbound TCP transfer committed: {} ({} bytes) - SHA-256: {} -> {}",
+        session.file_name, session.file_size, calculated_hash, final_dest.display()
     ));
 
-    // Emit final completed incoming transfer event to desktop UI
+    // Emit final 100% completed event to UI
     service
         .emit_progress(TransferProgressPayload {
             transfer_id: session.transfer_id.clone(),
@@ -869,17 +828,17 @@ async fn handle_upload(
             status: "completed".to_string(),
             peer_name: session.sender_name.clone(),
             error: None,
-            file_path: Some(target_file_path.to_string_lossy().to_string()),
+            file_path: Some(final_dest.to_string_lossy().to_string()),
         })
         .await;
 
     Ok(Json(json!({
         "success": true,
         "transferId": transfer_id,
-        "verified": verified,
-        "sha256Verified": verified,
+        "verified": true,
+        "sha256Verified": true,
         "sha256": calculated_hash,
-        "savedPath": target_file_path.to_string_lossy()
+        "savedPath": final_dest.to_string_lossy()
     })))
 }
 

@@ -17,3 +17,5 @@ prisma/dev.db
 prisma/*.db
 
 scratch/
+target/
+**/target/

@@ -30,4 +30,6 @@ rfd = "0.15"
 dirs = "6.0"
 chrono = "0.4"
 tokio-util = { version = "0.7", features = ["io"] }
-auradrop-quic = { path = "../../../crates/auradrop-quic" }
+
+[dev-dependencies]
+tempfile = "3.16"

@@ -72,11 +72,14 @@ data class PeerInfo(
 
 data class HttpUploadSession(
     val transferId: String,
+    val token: String,
     val fileName: String,
     val fileSize: Long,
     val sha256: String,
     val senderName: String,
-    val senderUserId: String
+    val senderUserId: String,
+    val expiresAt: Long,
+    val isConsumed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
 )
 
 object PeerRegistry {
@@ -1066,86 +1069,6 @@ class MainActivity : FlutterActivity() {
     private fun startTransferServerSocket() {
         if (transferServer != null) return
         serverJob = scope.launch(Dispatchers.IO) {
-            if (AuraQuicNative.isAvailable() && AuraQuicNative.quicPort == 0) {
-                try {
-                    AuraQuicNative.registerIncomingListener(object : AuraQuicIncomingListener {
-                        override fun onIncomingProgress(transferId: String, fileName: String, bytesTransferred: Long, totalBytes: Long, speedMbps: Double): Boolean {
-                            val session = activeTransfersState[transferId]
-                            if (session?.isCancelled?.get() == true) {
-                                AuraQuicNative.cancel(transferId)
-                                return false
-                            }
-                            val pct = if (totalBytes > 0) ((bytesTransferred.toDouble() / totalBytes.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                            val speedBytes = (speedMbps * 1024.0 * 1024.0 / 8.0).toLong()
-                            val eta = if (speedBytes > 0) ((totalBytes - bytesTransferred) / speedBytes).toInt() else 0
-
-                            sendEvent("transferProgress", mapOf(
-                                "transferId" to transferId,
-                                "state" to "TRANSFERRING",
-                                "fileName" to fileName,
-                                "totalBytes" to totalBytes,
-                                "transferredBytes" to bytesTransferred,
-                                "speedBytesPerSec" to speedBytes,
-                                "etaSeconds" to eta,
-                                "percentage" to pct
-                            ))
-
-                            updateForegroundTransferProgress(pct, "${String.format("%.1f", speedMbps)} MB/s", fileName, bytesTransferred, totalBytes, speedBytes, false)
-                            AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                                transferId = transferId,
-                                fileName = fileName,
-                                progressPercent = pct,
-                                transferredBytes = bytesTransferred,
-                                totalBytes = totalBytes,
-                                speedBytesPerSec = speedBytes,
-                                isSending = false
-                            )
-                            return true
-                        }
-
-                        override fun onIncomingComplete(transferId: String, fileName: String, filePath: String, totalBytes: Long) {
-                            stopForegroundTransferService()
-                            val session = activeTransfersState[transferId]
-                            val peerName = session?.senderName ?: "Nearby Device"
-
-                            dbHelper.insertTransfer(mapOf(
-                                "id" to transferId,
-                                "timestamp" to System.currentTimeMillis(),
-                                "senderName" to peerName,
-                                "receiverName" to deviceName,
-                                "fileName" to fileName,
-                                "fileType" to "application/octet-stream",
-                                "fileSize" to totalBytes,
-                                "direction" to "received",
-                                "status" to "completed",
-                                "durationMs" to 0L,
-                                "avgSpeed" to 0L,
-                                "sha256" to "",
-                                "localPath" to filePath,
-                                "transportType" to "QUIC_DATAPLANE"
-                            ))
-
-                            sendEvent("transferComplete", mapOf(
-                                "transferId" to transferId,
-                                "fileName" to fileName,
-                                "fileSize" to totalBytes,
-                                "verified" to true
-                            ))
-
-                            notifyForegroundTransferComplete(fileName, filePath, totalBytes)
-                            AuraOverlayManager.getInstance(applicationContext).markTransferComplete(fileName, totalBytes)
-                        }
-                    })
-
-                    val prof = dbHelper.getProfile()
-                    val devId = prof["device_id"] ?: deviceId
-                    AuraQuicNative.startServer(devId, 53318)
-                    Log.i(TAG, "QUIC Server initialized on port ${AuraQuicNative.quicPort}, certFP=${AuraQuicNative.certFingerprint}")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to start QUIC server: ${e.message}")
-                }
-            }
-
             try {
                 transferServer = try {
                     ServerSocket().apply {
@@ -1631,19 +1554,24 @@ class MainActivity : FlutterActivity() {
                     val prepJson = JSONObject(bodyStr)
 
                     val xferId = prepJson.optString("transferId", "xfer_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10))
-                    val fileName = prepJson.optString("fileName", "file")
+                    val fileName = sanitizeFilename(prepJson.optString("fileName", "file"))
                     val fileSize = prepJson.optLong("fileSize", 0L)
                     val sha256 = prepJson.optString("sha256", "")
                     val senderName = prepJson.optString("senderName", prepJson.optString("senderUserId", "Nearby Device"))
                     val senderUserId = prepJson.optString("senderUserId", "peer")
 
+                    val token = UUID.randomUUID().toString()
+                    val expiresAt = System.currentTimeMillis() + 60000L
+
                     val sessionMeta = HttpUploadSession(
                         transferId = xferId,
+                        token = token,
                         fileName = fileName,
                         fileSize = fileSize,
                         sha256 = sha256,
                         senderName = senderName,
-                        senderUserId = senderUserId
+                        senderUserId = senderUserId,
+                        expiresAt = expiresAt
                     )
                     httpUploadSessions[xferId] = sessionMeta
 
@@ -1657,7 +1585,7 @@ class MainActivity : FlutterActivity() {
                         "totalBytes" to fileSize,
                         "firstFileName" to fileName,
                         "createdAt" to System.currentTimeMillis(),
-                        "expiresAt" to System.currentTimeMillis() + 60000L
+                        "expiresAt" to expiresAt
                     ))
 
                     showSystemIncomingShareNotification(
@@ -1708,37 +1636,18 @@ class MainActivity : FlutterActivity() {
                     pendingHttpDecisions.remove(xferId)
 
                     if (accepted) {
-                        val token = "tok_$xferId"
-                        val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
-                        if (!downloadsDir.exists()) downloadsDir.mkdirs()
-                        val targetFile = resolveUniqueFile(downloadsDir, fileName)
-
-                        if (AuraQuicNative.isAvailable() && AuraQuicNative.quicPort > 0) {
-                            AuraQuicNative.approveIncomingTransfer(
-                                transferId = xferId,
-                                token = token,
-                                fileName = fileName,
-                                fileSize = fileSize,
-                                expectedSha256 = sha256,
-                                destinationPath = targetFile.absolutePath
-                            )
-                        }
-
                         sendJsonResponse(200, "OK", JSONObject().apply {
                             put("accepted", true)
                             put("transferId", xferId)
                             put("fileId", xferId)
                             put("oneTimeToken", token)
-                            put("expiresAt", System.currentTimeMillis() + 60000L)
-                            put("protocol", if (AuraQuicNative.quicPort > 0) "auradrop/quic/1" else "auradrop/1")
-                            if (AuraQuicNative.quicPort > 0) {
-                                put("quicPort", AuraQuicNative.quicPort)
-                                AuraQuicNative.certFingerprint?.let { put("certFingerprint", it) }
-                            }
+                            put("expiresAt", expiresAt)
+                            put("protocol", "auradrop/tcp/1")
                         })
                     } else {
                         cancelSystemIncomingShareNotification(xferId)
                         AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        httpUploadSessions.remove(xferId)
                         sendJsonResponse(403, "Forbidden", JSONObject().apply {
                             put("accepted", false)
                             put("error", "Transfer declined or timed out by recipient")
@@ -1748,12 +1657,50 @@ class MainActivity : FlutterActivity() {
 
                 "/api/auradrop/v1/upload" -> {
                     val xferId = queryParams["transferId"] ?: headers["x-transfer-id"] ?: ""
+                    val presentedToken = headers["x-token"] ?: headers["x-one-time-token"] ?: queryParams["token"] ?: ""
                     val sessionMeta = httpUploadSessions[xferId]
 
-                    val fileName = sessionMeta?.fileName ?: headers["x-file-name"] ?: queryParams["fileName"] ?: "received_file"
-                    val fileSize = sessionMeta?.fileSize ?: headers["x-file-size"]?.toLongOrNull() ?: contentLength
-                    val expectedSha256 = sessionMeta?.sha256 ?: headers["x-sha256"] ?: ""
-                    val senderName = sessionMeta?.senderName ?: "Nearby Device"
+                    if (sessionMeta == null) {
+                        sendJsonResponse(401, "Unauthorized", JSONObject().apply {
+                            put("error", "Unknown or expired transfer session")
+                        })
+                        return@withContext
+                    }
+
+                    if (System.currentTimeMillis() > sessionMeta.expiresAt) {
+                        httpUploadSessions.remove(xferId)
+                        sendJsonResponse(401, "Unauthorized", JSONObject().apply {
+                            put("error", "Transfer authorization token has expired")
+                        })
+                        return@withContext
+                    }
+
+                    if (!sessionMeta.isConsumed.compareAndSet(false, true)) {
+                        sendJsonResponse(403, "Forbidden", JSONObject().apply {
+                            put("error", "Transfer token already consumed (replay rejected)")
+                        })
+                        return@withContext
+                    }
+
+                    if (presentedToken != sessionMeta.token) {
+                        sendJsonResponse(403, "Forbidden", JSONObject().apply {
+                            put("error", "Invalid authorization token for this transfer")
+                        })
+                        return@withContext
+                    }
+
+                    val fileName = sessionMeta.fileName
+                    val fileSize = sessionMeta.fileSize
+                    val expectedSha256 = sessionMeta.sha256
+                    val senderName = sessionMeta.senderName
+
+                    val headerDeclaredSize = headers["x-file-size"]?.toLongOrNull()
+                    if (headerDeclaredSize != null && headerDeclaredSize != fileSize) {
+                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
+                            put("error", "Declared x-file-size does not match approved transfer metadata")
+                        })
+                        return@withContext
+                    }
 
                     if (xferId.isNotEmpty()) {
                         activeClientSockets[xferId] = socket
@@ -1769,11 +1716,12 @@ class MainActivity : FlutterActivity() {
                     val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
                     if (!downloadsDir.exists()) downloadsDir.mkdirs()
 
-                    val targetFile = resolveUniqueFile(downloadsDir, fileName)
+                    val finalFile = resolveUniqueFile(downloadsDir, fileName)
+                    val tempPartFile = File(downloadsDir, ".${fileName}.${xferId}.part")
                     val digest = MessageDigest.getInstance("SHA-256")
 
                     var totalWritten = 0L
-                    val buf = ByteArray(2 * 1024 * 1024)
+                    val buf = ByteArray(512 * 1024)
                     val startTime = System.currentTimeMillis()
                     var lastProgressTime = 0L
 
@@ -1788,9 +1736,10 @@ class MainActivity : FlutterActivity() {
                         isSending = false
                     )
 
-                    val fos = FileOutputStream(targetFile)
+                    var writeError = false
+                    val fos = FileOutputStream(tempPartFile)
                     try {
-                        val bos = BufferedOutputStream(fos, 2 * 1024 * 1024)
+                        val bos = BufferedOutputStream(fos, 512 * 1024)
                         while (totalWritten < fileSize) {
                             if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
                                 Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
@@ -1835,31 +1784,63 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         bos.flush()
+                    } catch (e: Exception) {
+                        writeError = true
+                        Log.e(TAG, "Disk write error during inbound transfer: ${e.message}")
                     } finally {
                         try { fos.close() } catch (_: Exception) {}
                         activeClientSockets.remove(xferId)
                         activeTransfersState.remove(xferId)
                     }
 
-                    if (activeTransfersState[xferId]?.isCancelled?.get() == true) {
+                    if (activeTransfersState[xferId]?.isCancelled?.get() == true || writeError) {
                         stopForegroundTransferService()
                         AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
-                        try { targetFile.delete() } catch (_: Exception) {}
+                        try { tempPartFile.delete() } catch (_: Exception) {}
                         httpUploadSessions.remove(xferId)
-                        sendJsonResponse(499, "Client Closed Request", JSONObject().apply {
-                            put("status", "cancelled")
+                        sendJsonResponse(if (writeError) 500 else 499, if (writeError) "Internal Server Error" else "Client Closed Request", JSONObject().apply {
+                            put("status", if (writeError) "error" else "cancelled")
                         })
                         return@withContext
                     }
 
+                    if (totalWritten != fileSize) {
+                        try { tempPartFile.delete() } catch (_: Exception) {}
+                        httpUploadSessions.remove(xferId)
+                        stopForegroundTransferService()
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
+                            put("error", "Byte count mismatch: received $totalWritten bytes, expected $fileSize")
+                        })
+                        return@withContext
+                    }
+
+                    val calculatedSha256 = digest.digest().toHex()
+                    if (expectedSha256.isNotEmpty() && !expectedSha256.startsWith("stream_")) {
+                        if (!calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
+                            try { tempPartFile.delete() } catch (_: Exception) {}
+                            httpUploadSessions.remove(xferId)
+                            stopForegroundTransferService()
+                            AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                            sendJsonResponse(422, "Unprocessable Entity", JSONObject().apply {
+                                put("error", "SHA-256 integrity mismatch")
+                                put("expected", expectedSha256)
+                                put("actual", calculatedSha256)
+                            })
+                            return@withContext
+                        }
+                    }
+
+                    // Atomic rename from temp file to final destination
+                    tempPartFile.renameTo(finalFile)
+                    httpUploadSessions.remove(xferId)
+
                     stopForegroundTransferService()
                     AuraOverlayManager.getInstance(applicationContext).markTransferComplete(fileName, fileSize)
-                    val calculatedSha256 = digest.digest().toHex()
-                    val verified = expectedSha256.isEmpty() || calculatedSha256.equals(expectedSha256, ignoreCase = true)
 
                     MediaScannerConnection.scanFile(
                         applicationContext,
-                        arrayOf(targetFile.absolutePath),
+                        arrayOf(finalFile.absolutePath),
                         null
                     ) { _, _ -> }
 
@@ -1871,23 +1852,23 @@ class MainActivity : FlutterActivity() {
                         "direction" to "received",
                         "senderName" to senderName,
                         "receiverName" to deviceName,
-                        "fileName" to fileName,
+                        "fileName" to finalFile.name,
                         "fileSize" to totalWritten,
-                        "status" to if (verified) "completed" else "failed",
+                        "status" to "completed",
                         "sha256" to calculatedSha256,
-                        "localPath" to targetFile.absolutePath,
-                        "transportType" to "LAN_HTTP_STREAM",
+                        "localPath" to finalFile.absolutePath,
+                        "transportType" to "LAN_TCP_STREAM",
                         "avgSpeed" to avgSpeed,
                         "createdAt" to System.currentTimeMillis()
                     ))
 
                     sendEvent("transferComplete", mapOf(
                         "transferId" to xferId,
-                        "fileName" to fileName,
+                        "fileName" to finalFile.name,
                         "fileSize" to totalWritten,
-                        "localPath" to targetFile.absolutePath,
+                        "localPath" to finalFile.absolutePath,
                         "sha256" to calculatedSha256,
-                        "verified" to verified
+                        "verified" to true
                     ))
 
                     cancelSystemIncomingShareNotification(xferId)
@@ -1895,9 +1876,9 @@ class MainActivity : FlutterActivity() {
                     sendJsonResponse(200, "OK", JSONObject().apply {
                         put("success", true)
                         put("transferId", xferId)
-                        put("verified", verified)
+                        put("verified", true)
                         put("sha256", calculatedSha256)
-                        put("savedPath", targetFile.absolutePath)
+                        put("savedPath", finalFile.absolutePath)
                     })
                 }
 
@@ -2232,7 +2213,6 @@ class MainActivity : FlutterActivity() {
         if (transferId.isNotBlank()) {
             pendingHttpDecisions.remove(transferId)?.complete(false)
             activeTransfersState[transferId]?.isCancelled?.set(true)
-            if (AuraQuicNative.isAvailable()) AuraQuicNative.cancel(transferId)
             try { activeClientSockets.remove(transferId)?.close() } catch (_: Exception) {}
             try { activeHttpConnections.remove(transferId)?.disconnect() } catch (_: Exception) {}
             activeTransfersState.remove(transferId)
@@ -2334,105 +2314,6 @@ class MainActivity : FlutterActivity() {
                 "state" to "READY_TO_TRANSFER"
             ))
 
-            // Attempt High-Performance QUIC Data Plane if remote supports it
-            if (AuraQuicNative.isAvailable() && peerQuicPort > 0 && peerCertFp.isNotEmpty()) {
-                val candidatePath = fileMap["path"] as? String
-                val resolvedFile = when {
-                    !candidatePath.isNullOrEmpty() && File(candidatePath).exists() -> File(candidatePath)
-                    uriStr.startsWith("file://") -> File(Uri.parse(uriStr).path ?: "")
-                    else -> null
-                }
-
-                if (resolvedFile != null && resolvedFile.exists()) {
-                    Log.i(TAG, "Target peer supports QUIC ($targetIp:$peerQuicPort). Sending via QUIC Data Plane...")
-                    startForegroundTransferService("Sending $fileName (QUIC)...", 0)
-                    val startTime = System.currentTimeMillis()
-                    var lastProgressTime = 0L
-
-                    val quicOk = AuraQuicNative.sendFile(
-                        targetIp = targetIp,
-                        targetPort = peerQuicPort,
-                        certFingerprint = peerCertFp,
-                        filePath = resolvedFile.absolutePath,
-                        transferId = transferId,
-                        token = token,
-                        fileName = fileName,
-                        fileSize = fileSize,
-                        expectedSha256 = "",
-                        callback = object : AuraQuicProgressCallback {
-                            override fun onProgress(bytesTransferred: Long, totalBytes: Long, speedMbps: Double): Boolean {
-                                if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
-                                    AuraQuicNative.cancel(transferId)
-                                    return false
-                                }
-                                val now = System.currentTimeMillis()
-                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || bytesTransferred >= totalBytes) {
-                                    lastProgressTime = now
-                                    val pct = if (totalBytes > 0) ((bytesTransferred.toDouble() / totalBytes.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                                    val speedBytes = (speedMbps * 1024.0 * 1024.0 / 8.0).toLong()
-                                    val eta = if (speedBytes > 0) ((totalBytes - bytesTransferred) / speedBytes).toInt() else 0
-
-                                    sendEvent("transferProgress", mapOf(
-                                        "transferId" to transferId,
-                                        "state" to "TRANSFERRING",
-                                        "fileName" to fileName,
-                                        "totalBytes" to totalBytes,
-                                        "transferredBytes" to bytesTransferred,
-                                        "speedBytesPerSec" to speedBytes,
-                                        "etaSeconds" to eta,
-                                        "percentage" to pct
-                                    ))
-
-                                    updateForegroundTransferProgress(pct, "${String.format("%.1f", speedMbps)} MB/s", fileName, bytesTransferred, totalBytes, speedBytes, true)
-                                }
-                                return true
-                            }
-                        }
-                    )
-
-                    if (quicOk) {
-                        Log.i(TAG, "QUIC data plane send succeeded for $fileName!")
-                        val totalDurationSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
-                        val avgSpeed = (fileSize / totalDurationSec).toLong()
-
-                        dbHelper.insertTransfer(mapOf(
-                            "id" to transferId,
-                            "direction" to "sent",
-                            "senderName" to senderDisplayName,
-                            "receiverName" to targetIp,
-                            "fileName" to fileName,
-                            "fileSize" to fileSize,
-                            "status" to "completed",
-                            "sha256" to "",
-                            "localPath" to resolvedFile.absolutePath,
-                            "transportType" to "QUIC_DATAPLANE",
-                            "avgSpeed" to avgSpeed,
-                            "createdAt" to System.currentTimeMillis()
-                        ))
-
-                        sendEvent("transferComplete", mapOf(
-                            "transferId" to transferId,
-                            "fileName" to fileName,
-                            "fileSize" to fileSize,
-                            "verified" to true
-                        ))
-
-                        AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                            transferId = transferId,
-                            fileName = fileName,
-                            progressPercent = 100,
-                            transferredBytes = fileSize,
-                            totalBytes = fileSize,
-                            speedBytesPerSec = avgSpeed,
-                            isSending = true
-                        )
-                        continue
-                    } else {
-                        Log.w(TAG, "QUIC send failed, falling back safely to HTTP/TCP streaming...")
-                    }
-                }
-            }
-
             val uploadUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/upload?transferId=$transferId&token=$token")
             val uploadConn = (uploadUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
@@ -2442,7 +2323,7 @@ class MainActivity : FlutterActivity() {
                 if (fileSize > 0) {
                     setFixedLengthStreamingMode(fileSize)
                 } else {
-                    setChunkedStreamingMode(2 * 1024 * 1024)
+                    setChunkedStreamingMode(512 * 1024)
                 }
                 setRequestProperty("x-transfer-id", transferId)
                 setRequestProperty("x-file-name", fileName)
@@ -2457,7 +2338,7 @@ class MainActivity : FlutterActivity() {
             val startTime = System.currentTimeMillis()
             var lastProgressTime = 0L
             var sentBytes = 0L
-            val buf = ByteArray(2 * 1024 * 1024)
+            val buf = ByteArray(512 * 1024)
 
             val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
                 ?: throw FileNotFoundException("Could not open URI: $uriStr")
@@ -2465,7 +2346,7 @@ class MainActivity : FlutterActivity() {
             try {
                 inputStream.use { fis ->
                     uploadConn.outputStream.use { uos ->
-                        val bos = BufferedOutputStream(uos, 2 * 1024 * 1024)
+                        val bos = BufferedOutputStream(uos, 512 * 1024)
                         while (sentBytes < fileSize) {
                             if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
                                 uploadConn.disconnect()
@@ -3442,9 +3323,6 @@ class MainActivity : FlutterActivity() {
         stopDiscoveryEngine()
         scope.cancel()
         transferServer?.close()
-        if (AuraQuicNative.isAvailable()) {
-            AuraQuicNative.shutdown()
-        }
         dbHelper.close()
         super.onDestroy()
     }
