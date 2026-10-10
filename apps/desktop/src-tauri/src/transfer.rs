@@ -85,6 +85,9 @@ pub struct SessionMetadata {
     pub expires_at: i64,
     pub sender_name: String,
     pub sender_id: String,
+    pub sender_identity_pub_hex: String,
+    pub sas_code: String,
+    pub is_first_contact: bool,
     pub is_consumed: bool,
     pub session_key: [u8; 32],
 }
@@ -215,6 +218,8 @@ impl TransferService {
             peer_name: peer_name.clone(),
             error: None,
             file_path: Some(file_path_str.clone()),
+            sas_code: None,
+            is_first_contact: None,
         })
         .await;
 
@@ -303,7 +308,7 @@ impl TransferService {
             &sender_eph_pub_hex,
             receiver_eph_hex,
         );
-        self.identity.verify_and_trust_peer(
+        let is_first_contact = self.identity.verify_peer_handshake(
             target_peer_id,
             receiver_identity_hex,
             &receiver_transcript,
@@ -319,6 +324,26 @@ impl TransferService {
             .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
         let shared_secret = sender_eph.complete(&receiver_pub_bytes)
             .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
+
+        // Compute 6-digit Short Authentication String (SAS)
+        let sas_code = crate::crypto::compute_sas_code(
+            &shared_secret,
+            &transfer_id,
+            &my_id,
+            target_peer_id,
+            &my_identity_pub_hex,
+            receiver_identity_hex,
+            &sender_eph_pub_hex,
+            receiver_eph_hex,
+        );
+
+        if is_first_contact {
+            crate::log_debug(&format!(
+                "[AuraTransfer] First contact with recipient {}! Verification SAS Code: [{}]",
+                target_peer_id, sas_code
+            ));
+        }
+
         let directional = crate::crypto::derive_directional_session_keys(
             &shared_secret,
             &transfer_id,
@@ -340,6 +365,7 @@ impl TransferService {
         let file_name_clone = file_name.clone();
         let peer_name_clone = peer_name.clone();
         let file_path_clone = file_path_str.clone();
+        let sas_code_clone = sas_code.clone();
 
         let mut transferred = 0u64;
         let start_time = Instant::now();
@@ -375,6 +401,7 @@ impl TransferService {
                         let fnm = file_name_clone.clone();
                         let pnm = peer_name_clone.clone();
                         let fp = file_path_clone.clone();
+                        let sas = sas_code_clone.clone();
 
                         tauri::async_runtime::spawn(async move {
                             s.emit_progress(TransferProgressPayload {
@@ -394,6 +421,8 @@ impl TransferService {
                                 peer_name: pnm,
                                 error: None,
                                 file_path: Some(fp),
+                                sas_code: Some(sas),
+                                is_first_contact: Some(is_first_contact),
                             })
                             .await;
                         });
@@ -441,6 +470,11 @@ impl TransferService {
             return Err(err);
         }
 
+        // Trust on First Use: Mark verified peer as trusted upon successful transfer completion
+        if is_first_contact {
+            let _ = self.identity.mark_peer_trusted(target_peer_id, receiver_identity_hex).await;
+        }
+
         // Final Completed emit
         self.emit_progress(TransferProgressPayload {
             transfer_id: transfer_id.clone(),
@@ -455,6 +489,8 @@ impl TransferService {
             peer_name,
             error: None,
             file_path: Some(file_path_str),
+            sas_code: Some(sas_code),
+            is_first_contact: Some(is_first_contact),
         })
         .await;
 
@@ -490,6 +526,8 @@ impl TransferService {
                 peer_name: peer_name.to_string(),
                 error: Some(error.to_string()),
                 file_path: None,
+                sas_code: None,
+                is_first_contact: None,
             };
             let _ = handle.emit("transfer-progress", payload);
         }
@@ -661,18 +699,21 @@ async fn handle_prepare_upload(
         &payload.sender_user_id,
         sender_eph_hex,
     );
-    if let Err(e) = service.identity.verify_and_trust_peer(
+    let is_first_contact = match service.identity.verify_peer_handshake(
         &payload.sender_user_id,
         sender_identity_hex,
         &sender_transcript,
         sender_sig_hex,
     ).await {
-        crate::log_debug(&format!("[PrepareUpload] Authentication failed: {}", e));
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": format!("Sender cryptographic authentication failed: {}", e)})),
-        ));
-    }
+        Ok(first) => first,
+        Err(e) => {
+            crate::log_debug(&format!("[PrepareUpload] Authentication failed: {}", e));
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": format!("Sender cryptographic authentication failed: {}", e)})),
+            ));
+        }
+    };
 
     let token = Uuid::new_v4().to_string();
     let expires_at = Utc::now().timestamp_millis() + 60000; // 60s TTL
@@ -700,6 +741,25 @@ async fn handle_prepare_upload(
             Json(json!({"error": format!("ECDH agreement error: {}", e)})),
         )
     })?;
+
+    // Compute SAS verification code bound to the ECDH shared secret and both device identities
+    let sas_code = crate::crypto::compute_sas_code(
+        &shared_secret,
+        &payload.transfer_id,
+        &payload.sender_user_id,
+        &my_id,
+        sender_identity_hex,
+        &my_identity_pub_hex,
+        sender_eph_hex,
+        &receiver_eph_pub_hex,
+    );
+
+    if is_first_contact {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Inbound first contact from sender {}! Verification SAS Code: [{}]",
+            payload.sender_user_id, sas_code
+        ));
+    }
 
     let directional = crate::crypto::derive_directional_session_keys(
         &shared_secret,
@@ -738,6 +798,9 @@ async fn handle_prepare_upload(
         expires_at,
         sender_name: sender_name.clone(),
         sender_id: payload.sender_user_id.clone(),
+        sender_identity_pub_hex: sender_identity_hex.to_string(),
+        sas_code: sas_code.clone(),
+        is_first_contact,
         is_consumed: false,
         session_key,
     };
@@ -754,8 +817,8 @@ async fn handle_prepare_upload(
         "***".to_string()
     };
     crate::log_debug(&format!(
-        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}]",
-        payload.file_name, payload.file_size, sender_name, masked_token
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}, SAS: {}]",
+        payload.file_name, payload.file_size, sender_name, masked_token, sas_code
     ));
 
     let file_id = payload
@@ -774,6 +837,8 @@ async fn handle_prepare_upload(
         receiver_eph_pub_key: Some(receiver_eph_pub_hex),
         receiver_identity_pub_key: Some(my_identity_pub_hex),
         receiver_signature: Some(receiver_sig_hex),
+        sas_code: Some(sas_code),
+        is_first_contact: Some(is_first_contact),
         quic_port: None,
         cert_fingerprint: None,
     }))
@@ -1065,6 +1130,8 @@ async fn handle_upload(
                     } else {
                         None
                     },
+                    sas_code: Some(session.sas_code.clone()),
+                    is_first_contact: Some(session.is_first_contact),
                 })
                 .await;
         }
@@ -1119,6 +1186,11 @@ async fn handle_upload(
         ));
     }
 
+    // Trust on First Use: Mark verified sender as trusted upon successful transfer completion
+    if session.is_first_contact {
+        let _ = service.identity.mark_peer_trusted(&session.sender_id, &session.sender_identity_pub_hex).await;
+    }
+
     // Remove finished session
     service.sessions.write().await.remove(&transfer_id);
 
@@ -1142,6 +1214,8 @@ async fn handle_upload(
             peer_name: session.sender_name.clone(),
             error: None,
             file_path: Some(final_dest.to_string_lossy().to_string()),
+            sas_code: Some(session.sas_code.clone()),
+            is_first_contact: Some(session.is_first_contact),
         })
         .await;
 

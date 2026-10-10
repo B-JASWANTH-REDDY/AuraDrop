@@ -52,6 +52,10 @@ pub struct TransferProgressPayload {
     pub error: Option<String>,
     #[serde(default)]
     pub file_path: Option<String>,
+    #[serde(default)]
+    pub sas_code: Option<String>,
+    #[serde(default)]
+    pub is_first_contact: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,6 +130,10 @@ pub struct PrepareUploadResponse {
     pub receiver_identity_pub_key: Option<String>,
     #[serde(default)]
     pub receiver_signature: Option<String>,
+    #[serde(default)]
+    pub sas_code: Option<String>,
+    #[serde(default)]
+    pub is_first_contact: Option<bool>,
     #[serde(default)]
     pub quic_port: Option<u16>,
     #[serde(default)]

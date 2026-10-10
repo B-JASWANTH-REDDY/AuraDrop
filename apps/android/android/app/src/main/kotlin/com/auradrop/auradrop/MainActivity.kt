@@ -19,6 +19,8 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.util.Log
 import android.webkit.MimeTypeMap
 import androidx.core.app.ActivityCompat
@@ -173,6 +175,33 @@ object AuraAeadCrypto {
         cipher.updateAAD(aad)
         return cipher.doFinal(ciphertextAndTag)
     }
+
+    fun computeSasCode(
+        sharedSecret: ByteArray,
+        transferId: String,
+        senderId: String,
+        receiverId: String,
+        senderIdentityPubHex: String,
+        receiverIdentityPubHex: String,
+        senderEphPubHex: String,
+        receiverEphPubHex: String
+    ): String {
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(transferId.toByteArray(Charsets.UTF_8), "HmacSHA256"))
+        val prk = mac.doFinal(sharedSecret)
+
+        val prkKey = SecretKeySpec(prk, "HmacSHA256")
+        mac.init(prkKey)
+        val infoStr = "auradrop/sas/v1:$senderId:$receiverId:$senderIdentityPubHex:$receiverIdentityPubHex:$senderEphPubHex:$receiverEphPubHex"
+        mac.update(infoStr.toByteArray(Charsets.UTF_8))
+        mac.update(0x01.toByte())
+        val okm = mac.doFinal()
+
+        val bb = ByteBuffer.wrap(okm)
+        val numRaw = bb.getInt().toLong() and 0xFFFFFFFFL
+        val num = (numRaw % 1_000_000L).toInt()
+        return String.format("%03d %03d", num / 1000, num % 1000)
+    }
 }
 
 object AuraIdentityManager {
@@ -181,6 +210,41 @@ object AuraIdentityManager {
 
     fun initialize(context: Context) {
         if (keyPair != null) return
+
+        // 1. Attempt hardware-backed / OS-backed Android Keystore
+        try {
+            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val alias = "auradrop_device_identity_p256"
+            if (keyStore.containsAlias(alias)) {
+                val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry
+                if (entry != null && entry.certificate?.publicKey is ECPublicKey) {
+                    val pub = entry.certificate.publicKey as ECPublicKey
+                    keyPair = KeyPair(pub, entry.privateKey)
+                    publicSec1Hex = AuraAeadCrypto.exportSec1PublicKey(pub).toHex()
+                    Log.i("AuraIdentity", "Loaded persistent identity from Android KeyStore: $publicSec1Hex")
+                    return
+                }
+            } else {
+                val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
+                val spec = KeyGenParameterSpec.Builder(
+                    alias,
+                    KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY
+                )
+                    .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                    .setDigests(KeyProperties.DIGEST_SHA256)
+                    .build()
+                kpg.initialize(spec)
+                val kp = kpg.generateKeyPair()
+                keyPair = kp
+                publicSec1Hex = AuraAeadCrypto.exportSec1PublicKey(kp.public as ECPublicKey).toHex()
+                Log.i("AuraIdentity", "Generated fresh persistent identity in Android KeyStore: $publicSec1Hex")
+                return
+            }
+        } catch (e: Exception) {
+            Log.w("AuraIdentity", "Android KeyStore unavailable or failed: ${e.message}, falling back to protected prefs")
+        }
+
+        // 2. Protected preferences fallback
         val prefs = context.getSharedPreferences("auradrop_crypto_identity", Context.MODE_PRIVATE)
         val privHex = prefs.getString("identity_private_key_pkcs8", null)
         val pubHex = prefs.getString("identity_public_key_sec1", null)
@@ -229,6 +293,58 @@ object AuraIdentityManager {
         return sig.sign().toHex()
     }
 
+    fun checkPeerTrustStatus(
+        context: Context,
+        peerId: String,
+        peerPubHex: String
+    ): Boolean? {
+        if (peerId.isBlank() || peerPubHex.isBlank()) return null
+        val prefs = context.getSharedPreferences("auradrop_trusted_peers", Context.MODE_PRIVATE)
+        val trustedPub = prefs.getString(peerId, null)
+        if (trustedPub != null) {
+            if (trustedPub != peerPubHex) {
+                Log.e("AuraIdentity", "Cryptographic identity mismatch! Peer $peerId presented $peerPubHex but previously trusted as $trustedPub")
+                return null // Mismatch / Attack
+            }
+            return false // Already trusted, frictionless
+        }
+        return true // First contact, SAS display required
+    }
+
+    fun markPeerTrusted(
+        context: Context,
+        peerId: String,
+        peerPubHex: String
+    ) {
+        val prefs = context.getSharedPreferences("auradrop_trusted_peers", Context.MODE_PRIVATE)
+        prefs.edit().putString(peerId, peerPubHex).apply()
+        Log.i("AuraIdentity", "Marked peer $peerId trusted with public key $peerPubHex")
+    }
+
+    fun verifyPeerHandshake(
+        context: Context,
+        peerId: String,
+        peerPubHex: String,
+        data: ByteArray,
+        sigHex: String
+    ): Boolean? {
+        val trustStatus = checkPeerTrustStatus(context, peerId, peerPubHex) ?: return null
+        return try {
+            val peerPub = AuraAeadCrypto.importSec1PublicKey(peerPubHex.decodeHex())
+            val sig = Signature.getInstance("SHA256withECDSA")
+            sig.initVerify(peerPub)
+            sig.update(data)
+            if (sig.verify(sigHex.decodeHex())) {
+                trustStatus
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.e("AuraIdentity", "Signature verification failed: ${e.message}")
+            null
+        }
+    }
+
     fun verifyAndTrustPeer(
         context: Context,
         peerId: String,
@@ -236,31 +352,11 @@ object AuraIdentityManager {
         data: ByteArray,
         sigHex: String
     ): Boolean {
-        if (peerId.isBlank() || peerPubHex.isBlank() || sigHex.isBlank()) return false
-        val prefs = context.getSharedPreferences("auradrop_trusted_peers", Context.MODE_PRIVATE)
-
-        // 1. Trust Store check (Trust-On-First-Use)
-        val trustedPub = prefs.getString(peerId, null)
-        if (trustedPub != null && trustedPub != peerPubHex) {
-            Log.e("AuraIdentity", "Cryptographic identity mismatch! Peer $peerId presented $peerPubHex but previously trusted as $trustedPub")
-            return false
+        val isFirst = verifyPeerHandshake(context, peerId, peerPubHex, data, sigHex) ?: return false
+        if (isFirst) {
+            markPeerTrusted(context, peerId, peerPubHex)
         }
-        if (trustedPub == null) {
-            prefs.edit().putString(peerId, peerPubHex).apply()
-            Log.i("AuraIdentity", "Recorded trusted peer identity for $peerId: $peerPubHex")
-        }
-
-        // 2. ECDSA signature verification
-        return try {
-            val peerPub = AuraAeadCrypto.importSec1PublicKey(peerPubHex.decodeHex())
-            val sig = Signature.getInstance("SHA256withECDSA")
-            sig.initVerify(peerPub)
-            sig.update(data)
-            sig.verify(sigHex.decodeHex())
-        } catch (e: Exception) {
-            Log.e("AuraIdentity", "Signature verification failed: ${e.message}")
-            false
-        }
+        return true
     }
 }
 
@@ -304,7 +400,10 @@ data class HttpUploadSession(
     val senderUserId: String,
     val expiresAt: Long,
     val isConsumed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
-    val sessionKey: ByteArray? = null
+    val sessionKey: ByteArray? = null,
+    val sasCode: String = "",
+    val isFirstContact: Boolean = false,
+    val senderIdentityPubHex: String = ""
 )
 
 object PeerRegistry {
@@ -1800,14 +1899,14 @@ class MainActivity : FlutterActivity() {
 
                     // Verify sender signature over sender transcript and validate against Trust Store
                     val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$xferId:$senderUserId:$senderEphHex".toByteArray(Charsets.UTF_8)
-                    val senderVerified = AuraIdentityManager.verifyAndTrustPeer(
+                    val isFirstContact = AuraIdentityManager.verifyPeerHandshake(
                         applicationContext,
                         senderUserId,
                         senderIdentityPubKey,
                         senderTranscript,
                         senderSignature
                     )
-                    if (!senderVerified) {
+                    if (isFirstContact == null) {
                         Log.e(TAG, "Sender cryptographic authentication failed for peer: $senderUserId")
                         sendJsonResponse(403, "Forbidden", JSONObject().apply {
                             put("error", "Sender cryptographic authentication failed: invalid signature or identity key mismatch")
@@ -1820,12 +1919,26 @@ class MainActivity : FlutterActivity() {
 
                     var receiverEphHex: String? = null
                     var receiverSig: String? = null
+                    var sasCodeStr: String = ""
                     val sessionKey: ByteArray? = try {
                         val receiverEph = AuraAeadCrypto.generateEphemeralKeyPair()
                         val receiverSec1 = AuraAeadCrypto.exportSec1PublicKey(receiverEph.public as ECPublicKey)
                         receiverEphHex = receiverSec1.toHex()
                         val senderPub = AuraAeadCrypto.importSec1PublicKey(senderEphHex.decodeHex())
                         val sharedSecret = AuraAeadCrypto.agreeEphemeral(receiverEph.private, senderPub)
+                        sasCodeStr = AuraAeadCrypto.computeSasCode(
+                            sharedSecret,
+                            xferId,
+                            senderUserId,
+                            deviceId,
+                            senderIdentityPubKey,
+                            AuraIdentityManager.getPublicKeyHex(),
+                            senderEphHex,
+                            receiverEphHex
+                        )
+                        if (isFirstContact) {
+                            Log.i(TAG, "[AuraTransfer] Inbound first contact from sender $senderUserId - Verification SAS: [$sasCodeStr]")
+                        }
                         val sKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
                             sharedSecret,
                             xferId,
@@ -1861,7 +1974,10 @@ class MainActivity : FlutterActivity() {
                         senderName = senderName,
                         senderUserId = senderUserId,
                         expiresAt = expiresAt,
-                        sessionKey = sessionKey
+                        sessionKey = sessionKey,
+                        sasCode = sasCodeStr,
+                        isFirstContact = isFirstContact,
+                        senderIdentityPubHex = senderIdentityPubKey
                     )
                     httpUploadSessions[xferId] = sessionMeta
 
@@ -1885,7 +2001,7 @@ class MainActivity : FlutterActivity() {
                         totalFiles = 1,
                         totalBytes = fileSize,
                         firstFileName = fileName,
-                        sasCode = ""
+                        sasCode = sasCodeStr
                     )
 
                     val decisionDeferred = CompletableDeferred<Boolean>()
@@ -1916,7 +2032,9 @@ class MainActivity : FlutterActivity() {
                         "firstFileName" to fileName,
                         "fileName" to fileName,
                         "totalBytes" to fileSize,
-                        "fileCount" to 1
+                        "fileCount" to 1,
+                        "sasCode" to sasCodeStr,
+                        "isFirstContact" to isFirstContact
                     ))
 
                     // Await user's explicit Accept or Decline decision (up to 60 seconds)
@@ -1943,6 +2061,8 @@ class MainActivity : FlutterActivity() {
                             if (receiverSig != null) {
                                 put("receiverSignature", receiverSig)
                             }
+                            put("sasCode", sasCodeStr)
+                            put("isFirstContact", isFirstContact)
                         })
                     } else {
                         cancelSystemIncomingShareNotification(xferId)
@@ -2180,6 +2300,9 @@ class MainActivity : FlutterActivity() {
 
                     // Atomic rename from temp file to final destination
                     tempPartFile.renameTo(finalFile)
+                    if (sessionMeta.isFirstContact) {
+                        AuraIdentityManager.markPeerTrusted(applicationContext, sessionMeta.senderUserId, sessionMeta.senderIdentityPubHex)
+                    }
                     httpUploadSessions.remove(xferId)
 
                     stopForegroundTransferService()
@@ -2690,14 +2813,14 @@ class MainActivity : FlutterActivity() {
 
             // Verify receiver signature over receiver transcript and validate against Trust Store
             val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$transferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
-            val authOk = AuraIdentityManager.verifyAndTrustPeer(
+            val isFirstContact = AuraIdentityManager.verifyPeerHandshake(
                 applicationContext,
                 receiverId,
                 receiverIdentityPubKey,
                 receiverTranscript,
                 receiverSignature
             )
-            if (!authOk) {
+            if (isFirstContact == null) {
                 Log.e(TAG, "Cryptographic receiver authentication failed!")
                 sendEvent("transferError", mapOf(
                     "transferId" to transferId,
@@ -2708,6 +2831,19 @@ class MainActivity : FlutterActivity() {
 
             val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
             val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
+            val sasCode = AuraAeadCrypto.computeSasCode(
+                sharedSecret,
+                transferId,
+                deviceId,
+                receiverId,
+                AuraIdentityManager.getPublicKeyHex(),
+                receiverIdentityPubKey,
+                senderSec1.toHex(),
+                receiverEphHex
+            )
+            if (isFirstContact) {
+                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Verification SAS: [$sasCode]")
+            }
             val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
                 sharedSecret,
                 transferId,
@@ -2819,6 +2955,9 @@ class MainActivity : FlutterActivity() {
             uploadConn.disconnect()
 
             if (uploadStatus in 200..299) {
+                if (isFirstContact) {
+                    AuraIdentityManager.markPeerTrusted(applicationContext, receiverId, receiverIdentityPubKey)
+                }
                 notifyForegroundTransferComplete(fileName, uriStr, sentBytes)
                 val elapsedTotalSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
                 val avgSpeed = (sentBytes / elapsedTotalSec).toLong()

@@ -40,6 +40,8 @@ export interface TransferProgressPayload {
   peerName: string;
   error?: string | null;
   filePath?: string | null;
+  sasCode?: string | null;
+  isFirstContact?: boolean | null;
 }
 
 export interface ChatMessage {

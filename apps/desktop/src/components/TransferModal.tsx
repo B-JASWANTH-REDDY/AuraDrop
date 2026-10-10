@@ -106,6 +106,21 @@ export const TransferModal: React.FC<TransferModalProps> = ({
           />
         </div>
 
+        {/* Security Verification SAS Code */}
+        {transfer.sasCode && (
+          <div className="p-3 rounded-xl bg-neutral-900 border border-white/20 text-xs text-white flex items-center justify-between mb-4">
+            <div className="flex flex-col">
+              <span className="font-semibold text-white">Security Code</span>
+              <span className="text-[11px] text-neutral-400">
+                {transfer.isFirstContact ? 'First-Contact Peer Verification' : 'Cryptographically Verified'}
+              </span>
+            </div>
+            <span className="font-mono text-sm tracking-widest bg-white text-black px-2.5 py-1 rounded-lg font-bold">
+              {transfer.sasCode}
+            </span>
+          </div>
+        )}
+
         {/* Telemetry Stats */}
         {!isCompleted && !isFailed && (
           <div className="flex items-center justify-between text-xs text-neutral-400 px-1 mb-6">

@@ -5,6 +5,7 @@ use std::process::Command;
 fn main() {
     #[cfg(target_os = "windows")]
     {
+        println!("cargo:rustc-link-lib=crypt32");
         if let Ok(out_dir_str) = env::var("OUT_DIR") {
             let out_dir = PathBuf::from(out_dir_str);
             let manifest_path = out_dir.join("common_controls.manifest");

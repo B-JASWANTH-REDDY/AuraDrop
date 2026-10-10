@@ -951,6 +951,102 @@ async fn test_adversarial_suite() {
         .await
         .unwrap();
     assert_eq!(plain_res.status(), StatusCode::BAD_REQUEST, "Plaintext fallback must be strictly rejected");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 6: Active MitM First-Contact Key Substitution Detection via SAS Code
+    // -----------------------------------------------------------------------------------------
+    let alice_identity = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+    let bob_identity = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+    let mallory_identity = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+
+    let alice_eph = auradrop_lib::crypto::EphemeralKeyExchange::generate().unwrap();
+    let bob_eph = auradrop_lib::crypto::EphemeralKeyExchange::generate().unwrap();
+    let mallory_eph_alice = auradrop_lib::crypto::EphemeralKeyExchange::generate().unwrap();
+    let mallory_eph_bob = auradrop_lib::crypto::EphemeralKeyExchange::generate().unwrap();
+
+    let alice_eph_hex = alice_eph.public_key_hex();
+    let bob_eph_hex = bob_eph.public_key_hex();
+    let mallory_eph_alice_hex = mallory_eph_alice.public_key_hex();
+    let mallory_eph_bob_hex = mallory_eph_bob.public_key_hex();
+
+    // Mallory intercepts Alice <-> Bob and performs two independent key agreements:
+    let alice_shared = alice_eph.complete(mallory_eph_alice.public_key_bytes()).unwrap();
+    let bob_shared = bob_eph.complete(mallory_eph_bob.public_key_bytes()).unwrap();
+
+    // Alice calculates SAS code believing she is talking to Bob
+    let alice_sas = auradrop_lib::crypto::compute_sas_code(
+        &alice_shared,
+        "adv_mitm_06",
+        "alice_dev",
+        "bob_dev",
+        &alice_identity.public_key_hex(),
+        &mallory_identity.public_key_hex(),
+        &alice_eph_hex,
+        &mallory_eph_alice_hex,
+    );
+
+    // Bob calculates SAS code believing he is talking to Alice
+    let bob_sas = auradrop_lib::crypto::compute_sas_code(
+        &bob_shared,
+        "adv_mitm_06",
+        "alice_dev",
+        "bob_dev",
+        &mallory_identity.public_key_hex(),
+        &bob_identity.public_key_hex(),
+        &mallory_eph_bob_hex,
+        &bob_eph_hex,
+    );
+
+    // Assert that SAS codes diverge, exposing MitM on First Contact
+    assert_ne!(
+        alice_sas, bob_sas,
+        "Active first-contact MitM attacker MUST result in divergent SAS codes"
+    );
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 7: Ephemeral key alteration during authenticated handshake
+    // -----------------------------------------------------------------------------------------
+    let sender_id = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+    let legitimate_transcript = auradrop_lib::crypto::compute_sender_transcript(
+        "auradrop/tcp/2",
+        "adv_sig_07",
+        "sender_dev",
+        "04112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
+    );
+    let signature = sender_id.sign(&legitimate_transcript).unwrap();
+
+    // Attacker modifies ephemeral key in flight
+    let tampered_transcript = auradrop_lib::crypto::compute_sender_transcript(
+        "auradrop/tcp/2",
+        "adv_sig_07",
+        "sender_dev",
+        "04ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    );
+    let verify_tampered = auradrop_lib::crypto::DeviceIdentity::verify(
+        sender_id.public_key_bytes(),
+        &tampered_transcript,
+        &signature,
+    );
+    assert!(verify_tampered.is_err(), "Tampered ephemeral key must fail signature verification");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 8: Identity public key replacement rejected by Trust Store
+    // -----------------------------------------------------------------------------------------
+    let identity_mgr = auradrop_lib::identity::IdentityManager::init();
+
+    // Mark trusted
+    let peer_dev_id = "peer_charlie";
+    let original_pub = "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    identity_mgr.mark_peer_trusted(peer_dev_id, original_pub).await.unwrap();
+
+    // Verify subsequent connection with matching key
+    let is_first = identity_mgr.check_peer_trust_status(peer_dev_id, original_pub).await.unwrap();
+    assert!(!is_first, "Known peer should not be flagged as first contact");
+
+    // Attacker presents substituted identity key for same peer_id
+    let substituted_pub = "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let attack_result = identity_mgr.check_peer_trust_status(peer_dev_id, substituted_pub).await;
+    assert!(attack_result.is_err(), "Public key substitution must be rejected as impersonation");
 }
 
 #[tokio::test]
