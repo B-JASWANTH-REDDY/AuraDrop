@@ -12,6 +12,8 @@ pub struct PeerDevice {
     pub version: String,
     pub last_seen_ms: i64,
     pub is_online: bool,
+    #[serde(default)]
+    pub identity_pub_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +78,8 @@ pub struct DiscoveryPacket {
     pub status: Option<String>,
     #[serde(default)]
     pub timestamp: Option<i64>,
+    #[serde(default)]
+    pub identity_pub_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +101,10 @@ pub struct PrepareUploadRequest {
     pub client_quic_port: Option<u16>,
     #[serde(default)]
     pub sender_eph_pub_key: Option<String>,
+    #[serde(default)]
+    pub sender_identity_pub_key: Option<String>,
+    #[serde(default)]
+    pub sender_signature: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +122,10 @@ pub struct PrepareUploadResponse {
     pub receiver_id: Option<String>,
     #[serde(default)]
     pub receiver_eph_pub_key: Option<String>,
+    #[serde(default)]
+    pub receiver_identity_pub_key: Option<String>,
+    #[serde(default)]
+    pub receiver_signature: Option<String>,
     #[serde(default)]
     pub quic_port: Option<u16>,
     #[serde(default)]

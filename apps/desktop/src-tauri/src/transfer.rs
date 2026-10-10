@@ -228,6 +228,17 @@ impl TransferService {
         let sender_eph = crate::crypto::EphemeralKeyExchange::generate()
             .map_err(|e| format!("ECDH key generation failed: {}", e))?;
         let sender_eph_pub_hex = sender_eph.public_key_hex();
+        let my_identity_pub_hex = self.identity.get_public_key_hex();
+
+        // Sign the sender transcript with our persistent device identity
+        let sender_transcript = crate::crypto::compute_sender_transcript(
+            "auradrop/tcp/2",
+            &transfer_id,
+            &my_id,
+            &sender_eph_pub_hex,
+        );
+        let sender_signature_hex = self.identity.sign_transcript(&sender_transcript)
+            .map_err(|e| format!("Sender identity signing failed: {}", e))?;
 
         // Step 1: Handshake with recipient on /prepare-upload
         let prep_url = format!("http://{}:{}/api/auradrop/v1/prepare-upload", peer_ip, peer_port);
@@ -239,6 +250,8 @@ impl TransferService {
             "senderUserId": my_id,
             "senderName": my_name,
             "senderEphPubKey": sender_eph_pub_hex,
+            "senderIdentityPubKey": my_identity_pub_hex,
+            "senderSignature": sender_signature_hex,
         });
 
         let prep_res = client
@@ -272,28 +285,50 @@ impl TransferService {
             return Err(err);
         }
 
+        let receiver_eph_hex = prep_data.receiver_eph_pub_key.as_ref()
+            .ok_or_else(|| "Recipient omitted ephemeral public key".to_string())?;
+        let receiver_identity_hex = prep_data.receiver_identity_pub_key.as_ref()
+            .ok_or_else(|| "Recipient omitted identity public key".to_string())?;
+        let receiver_sig_hex = prep_data.receiver_signature.as_ref()
+            .ok_or_else(|| "Recipient omitted cryptographic signature".to_string())?;
         let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
-        let session_key = if let Some(receiver_eph_hex) = prep_data.receiver_eph_pub_key.as_ref() {
-            let receiver_pub_bytes = hex::decode(receiver_eph_hex)
-                .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
-            let shared_secret = sender_eph.complete(&receiver_pub_bytes)
-                .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
-            let directional = crate::crypto::derive_directional_session_keys(
-                &shared_secret,
-                &transfer_id,
-                &prep_data.one_time_token,
-                &my_id,
-                target_peer_id,
-            );
-            directional.sender_to_receiver
-        } else {
-            crate::crypto::derive_session_key(
-                &prep_data.one_time_token,
-                &transfer_id,
-                &my_id,
-                target_peer_id,
-            )
-        };
+
+        // Verify receiver's cryptographic signature and Trust Store identity
+        let receiver_transcript = crate::crypto::compute_receiver_transcript(
+            &prep_data.protocol,
+            &transfer_id,
+            &prep_data.one_time_token,
+            &my_id,
+            target_peer_id,
+            &sender_eph_pub_hex,
+            receiver_eph_hex,
+        );
+        self.identity.verify_and_trust_peer(
+            target_peer_id,
+            receiver_identity_hex,
+            &receiver_transcript,
+            receiver_sig_hex,
+        ).await.map_err(|e| {
+            let err = format!("Cryptographic recipient authentication failed: {}", e);
+            crate::log_debug(&err);
+            err
+        })?;
+
+        // Perform ECDH agreement and derive directional keys bound to both identities
+        let receiver_pub_bytes = hex::decode(receiver_eph_hex)
+            .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
+        let shared_secret = sender_eph.complete(&receiver_pub_bytes)
+            .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
+        let directional = crate::crypto::derive_directional_session_keys(
+            &shared_secret,
+            &transfer_id,
+            &prep_data.one_time_token,
+            &my_id,
+            target_peer_id,
+            &my_identity_pub_hex,
+            receiver_identity_hex,
+        );
+        let session_key = directional.sender_to_receiver;
 
         // Step 2: Stream file bytes over authenticated TCP with AEAD encryption and bounded buffer (512 KiB)
         // Clean URL: Token and transfer ID removed from query string per security requirements
@@ -555,6 +590,7 @@ impl TransferService {
 async fn handle_ping(State(service): State<TransferService>) -> Json<serde_json::Value> {
     let id = service.identity.get_device_id().await;
     let name = service.identity.get_device_name().await;
+    let identity_pub = service.identity.get_public_key_hex();
     Json(json!({
         "status": "ok",
         "pong": true,
@@ -564,7 +600,8 @@ async fn handle_ping(State(service): State<TransferService>) -> Json<serde_json:
         "platform": "windows",
         "port": TRANSFER_PORT,
         "transferPort": TRANSFER_PORT,
-        "protocol": "AURADROP/1"
+        "protocol": "AURADROP/1",
+        "identityPubKey": identity_pub
     }))
 }
 
@@ -589,46 +626,108 @@ async fn handle_prepare_upload(
         ));
     }
 
+    let sender_eph_hex = match payload.sender_eph_pub_key.as_ref() {
+        Some(k) if !k.is_empty() => k,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing ephemeral ECDH public key. Authenticated encryption required."})),
+            ));
+        }
+    };
+    let sender_identity_hex = match payload.sender_identity_pub_key.as_ref() {
+        Some(k) if !k.is_empty() => k,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing sender identity public key. Authenticated key exchange required."})),
+            ));
+        }
+    };
+    let sender_sig_hex = match payload.sender_signature.as_ref() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "Missing sender cryptographic signature. Authenticated key exchange required."})),
+            ));
+        }
+    };
+
+    // Verify sender signature over sender transcript and validate against Trust Store
+    let sender_transcript = crate::crypto::compute_sender_transcript(
+        "auradrop/tcp/2",
+        &payload.transfer_id,
+        &payload.sender_user_id,
+        sender_eph_hex,
+    );
+    if let Err(e) = service.identity.verify_and_trust_peer(
+        &payload.sender_user_id,
+        sender_identity_hex,
+        &sender_transcript,
+        sender_sig_hex,
+    ).await {
+        crate::log_debug(&format!("[PrepareUpload] Authentication failed: {}", e));
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": format!("Sender cryptographic authentication failed: {}", e)})),
+        ));
+    }
+
     let token = Uuid::new_v4().to_string();
     let expires_at = Utc::now().timestamp_millis() + 60000; // 60s TTL
     let sender_name = payload.sender_name.clone().unwrap_or_else(|| payload.sender_user_id.clone());
     let my_id = service.identity.get_device_id().await;
+    let my_identity_pub_hex = service.identity.get_public_key_hex();
 
-    // Perform authenticated ECDH key agreement if sender supplied ephemeral public key
-    let (session_key, receiver_eph_pub_hex) = if let Some(sender_eph_hex) = payload.sender_eph_pub_key.as_ref() {
-        let sender_pub_bytes = hex::decode(sender_eph_hex).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("Invalid sender ephemeral key hex: {}", e)})),
-            )
-        })?;
-        let receiver_eph = crate::crypto::EphemeralKeyExchange::generate().map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Receiver ECDH keygen error: {}", e)})),
-            )
-        })?;
-        let pub_hex = receiver_eph.public_key_hex();
-        let shared_secret = receiver_eph.complete(&sender_pub_bytes).map_err(|e| {
-            (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": format!("ECDH agreement error: {}", e)})),
-            )
-        })?;
-        let directional = crate::crypto::derive_directional_session_keys(
-            &shared_secret,
-            &payload.transfer_id,
-            &token,
-            &payload.sender_user_id,
-            &my_id,
-        );
-        (directional.sender_to_receiver, Some(pub_hex))
-    } else {
+    // Receiver generates ephemeral key and agrees with sender
+    let sender_pub_bytes = hex::decode(sender_eph_hex).map_err(|e| {
         (
-            crate::crypto::derive_session_key(&token, &payload.transfer_id, &payload.sender_user_id, &my_id),
-            None,
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("Invalid sender ephemeral key hex: {}", e)})),
         )
-    };
+    })?;
+    let receiver_eph = crate::crypto::EphemeralKeyExchange::generate().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Receiver ECDH keygen error: {}", e)})),
+        )
+    })?;
+    let receiver_eph_pub_hex = receiver_eph.public_key_hex();
+    let shared_secret = receiver_eph.complete(&sender_pub_bytes).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": format!("ECDH agreement error: {}", e)})),
+        )
+    })?;
+
+    let directional = crate::crypto::derive_directional_session_keys(
+        &shared_secret,
+        &payload.transfer_id,
+        &token,
+        &payload.sender_user_id,
+        &my_id,
+        sender_identity_hex,
+        &my_identity_pub_hex,
+    );
+    let session_key = directional.sender_to_receiver;
+
+    // Receiver signs receiver transcript
+    let receiver_transcript = crate::crypto::compute_receiver_transcript(
+        "auradrop/tcp/2",
+        &payload.transfer_id,
+        &token,
+        &payload.sender_user_id,
+        &my_id,
+        sender_eph_hex,
+        &receiver_eph_pub_hex,
+    );
+    let receiver_sig_hex = service.identity.sign_transcript(&receiver_transcript).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Receiver signature generation error: {}", e)})),
+        )
+    })?;
 
     let meta = SessionMetadata {
         transfer_id: payload.transfer_id.clone(),
@@ -672,7 +771,9 @@ async fn handle_prepare_upload(
         protocol: "auradrop/tcp/2".to_string(),
         encryption: Some("aead-aes256-gcm".to_string()),
         receiver_id: Some(my_id),
-        receiver_eph_pub_key: receiver_eph_pub_hex,
+        receiver_eph_pub_key: Some(receiver_eph_pub_hex),
+        receiver_identity_pub_key: Some(my_identity_pub_hex),
+        receiver_signature: Some(receiver_sig_hex),
         quic_port: None,
         cert_fingerprint: None,
     }))

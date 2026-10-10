@@ -164,6 +164,7 @@ impl DiscoveryService {
             version: Some("1.0.0".to_string()),
             status: Some("Nearby sharing made effortless".to_string()),
             timestamp: Some(now),
+            identity_pub_key: Some(self.identity.get_public_key_hex()),
         };
 
         if let Ok(payload) = serde_json::to_vec(&packet) {
@@ -240,6 +241,10 @@ impl DiscoveryService {
                                         .and_then(|v| v.as_u64())
                                         .unwrap_or(DISCOVERY_PORT as u64) as u16;
 
+                                    let identity_pub_key = json.get("identityPubKey")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
                                     let peer = PeerDevice {
                                         id: remote_id.clone(),
                                         name: remote_name.clone(),
@@ -250,6 +255,7 @@ impl DiscoveryService {
                                         version: "1.0.0".to_string(),
                                         last_seen_ms: Utc::now().timestamp_millis(),
                                         is_online: true,
+                                        identity_pub_key,
                                     };
 
                                     crate::log_debug(&format!(
@@ -315,6 +321,10 @@ impl DiscoveryService {
                         .and_then(|v| v.as_u64())
                         .unwrap_or(DISCOVERY_PORT as u64) as u16;
 
+                    let identity_pub_key = json.get("identityPubKey")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
                     let peer = PeerDevice {
                         id: remote_id.clone(),
                         name: remote_name,
@@ -325,6 +335,7 @@ impl DiscoveryService {
                         version: "1.0.0".to_string(),
                         last_seen_ms: Utc::now().timestamp_millis(),
                         is_online: true,
+                        identity_pub_key,
                     };
 
                     crate::log_debug(&format!(
@@ -451,6 +462,7 @@ impl DiscoveryService {
                             version: packet.version.unwrap_or_else(|| "1.0.0".to_string()),
                             last_seen_ms: Utc::now().timestamp_millis(),
                             is_online: true,
+                            identity_pub_key: packet.identity_pub_key,
                         };
 
                         crate::log_debug(&format!(

@@ -115,7 +115,9 @@ object AuraAeadCrypto {
         transferId: String,
         token: String,
         senderId: String,
-        receiverId: String
+        receiverId: String,
+        senderIdentityPubHex: String = "",
+        receiverIdentityPubHex: String = ""
     ): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         val saltBytes = "$transferId:$token".toByteArray(Charsets.UTF_8)
@@ -124,7 +126,7 @@ object AuraAeadCrypto {
 
         val prkKey = SecretKeySpec(prk, "HmacSHA256")
         mac.init(prkKey)
-        val s2rInfo = "auradrop/tcp/aead/v2/sender-to-receiver:$senderId:$receiverId".toByteArray(Charsets.UTF_8)
+        val s2rInfo = "auradrop/tcp/aead/v3/sender-to-receiver:$senderId:$receiverId:$senderIdentityPubHex:$receiverIdentityPubHex".toByteArray(Charsets.UTF_8)
         mac.update(s2rInfo)
         mac.update(0x01.toByte())
         val okm = mac.doFinal()
@@ -170,6 +172,95 @@ object AuraAeadCrypto {
         cipher.init(Cipher.DECRYPT_MODE, key, spec)
         cipher.updateAAD(aad)
         return cipher.doFinal(ciphertextAndTag)
+    }
+}
+
+object AuraIdentityManager {
+    private var keyPair: KeyPair? = null
+    private var publicSec1Hex: String = ""
+
+    fun initialize(context: Context) {
+        if (keyPair != null) return
+        val prefs = context.getSharedPreferences("auradrop_crypto_identity", Context.MODE_PRIVATE)
+        val privHex = prefs.getString("identity_private_key_pkcs8", null)
+        val pubHex = prefs.getString("identity_public_key_sec1", null)
+
+        if (!privHex.isNullOrEmpty() && !pubHex.isNullOrEmpty()) {
+            try {
+                val kf = KeyFactory.getInstance("EC")
+                val privSpec = java.security.spec.PKCS8EncodedKeySpec(privHex.decodeHex())
+                val privKey = kf.generatePrivate(privSpec)
+                val pubKey = AuraAeadCrypto.importSec1PublicKey(pubHex.decodeHex())
+                keyPair = KeyPair(pubKey, privKey)
+                publicSec1Hex = pubHex
+                return
+            } catch (e: Exception) {
+                Log.w("AuraIdentity", "Failed to load saved identity, generating fresh: ${e.message}")
+            }
+        }
+
+        try {
+            val kpg = KeyPairGenerator.getInstance("EC")
+            kpg.initialize(ECGenParameterSpec("secp256r1"))
+            val kp = kpg.generateKeyPair()
+            val sec1 = AuraAeadCrypto.exportSec1PublicKey(kp.public as ECPublicKey)
+            val sec1Hex = sec1.toHex()
+            val privBytesHex = kp.private.encoded.toHex()
+
+            prefs.edit()
+                .putString("identity_private_key_pkcs8", privBytesHex)
+                .putString("identity_public_key_sec1", sec1Hex)
+                .apply()
+
+            keyPair = kp
+            publicSec1Hex = sec1Hex
+        } catch (e: Exception) {
+            Log.e("AuraIdentity", "ECDSA keygen failed: ${e.message}")
+        }
+    }
+
+    fun getPublicKeyHex(): String = publicSec1Hex
+
+    fun sign(data: ByteArray): String {
+        val kp = checkNotNull(keyPair) { "IdentityManager not initialized" }
+        val sig = Signature.getInstance("SHA256withECDSA")
+        sig.initSign(kp.private)
+        sig.update(data)
+        return sig.sign().toHex()
+    }
+
+    fun verifyAndTrustPeer(
+        context: Context,
+        peerId: String,
+        peerPubHex: String,
+        data: ByteArray,
+        sigHex: String
+    ): Boolean {
+        if (peerId.isBlank() || peerPubHex.isBlank() || sigHex.isBlank()) return false
+        val prefs = context.getSharedPreferences("auradrop_trusted_peers", Context.MODE_PRIVATE)
+
+        // 1. Trust Store check (Trust-On-First-Use)
+        val trustedPub = prefs.getString(peerId, null)
+        if (trustedPub != null && trustedPub != peerPubHex) {
+            Log.e("AuraIdentity", "Cryptographic identity mismatch! Peer $peerId presented $peerPubHex but previously trusted as $trustedPub")
+            return false
+        }
+        if (trustedPub == null) {
+            prefs.edit().putString(peerId, peerPubHex).apply()
+            Log.i("AuraIdentity", "Recorded trusted peer identity for $peerId: $peerPubHex")
+        }
+
+        // 2. ECDSA signature verification
+        return try {
+            val peerPub = AuraAeadCrypto.importSec1PublicKey(peerPubHex.decodeHex())
+            val sig = Signature.getInstance("SHA256withECDSA")
+            sig.initVerify(peerPub)
+            sig.update(data)
+            sig.verify(sigHex.decodeHex())
+        } catch (e: Exception) {
+            Log.e("AuraIdentity", "Signature verification failed: ${e.message}")
+            false
+        }
     }
 }
 
@@ -361,6 +452,7 @@ class MainActivity : FlutterActivity() {
         }
 
         createSystemNotificationChannels()
+        AuraIdentityManager.initialize(applicationContext)
         dbHelper = AuraDropDatabaseHelper(this)
 
         val prefs = getSharedPreferences("auradrop_identity", Context.MODE_PRIVATE)
@@ -1098,6 +1190,7 @@ class MainActivity : FlutterActivity() {
                         put("avatarPath", prof["avatar_path"] ?: "")
                         put("status", prof["bio"] ?: "Nearby sharing made effortless")
                         put("timestamp", System.currentTimeMillis())
+                        put("identityPubKey", AuraIdentityManager.getPublicKeyHex())
                     }
                     val bytes = beacon.toString().toByteArray(Charsets.UTF_8)
 
@@ -1616,6 +1709,7 @@ class MainActivity : FlutterActivity() {
                         put("port", DEFAULT_PORT)
                         put("transferPort", DEFAULT_PORT)
                         put("protocol", "AURADROP/1")
+                        put("identityPubKey", AuraIdentityManager.getPublicKeyHex())
                     }
                     sendJsonResponse(200, "OK", json)
                 }
@@ -1694,25 +1788,68 @@ class MainActivity : FlutterActivity() {
                     val senderName = prepJson.optString("senderName", prepJson.optString("senderUserId", "Nearby Device"))
                     val senderUserId = prepJson.optString("senderUserId", "peer")
                     val senderEphHex = prepJson.optString("senderEphPubKey", "")
+                    val senderIdentityPubKey = prepJson.optString("senderIdentityPubKey", "")
+                    val senderSignature = prepJson.optString("senderSignature", "")
+
+                    if (senderEphHex.isEmpty() || senderIdentityPubKey.isEmpty() || senderSignature.isEmpty()) {
+                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
+                            put("error", "Missing ephemeral key, identity public key, or cryptographic signature. Authenticated key exchange required.")
+                        })
+                        return@withContext
+                    }
+
+                    // Verify sender signature over sender transcript and validate against Trust Store
+                    val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$xferId:$senderUserId:$senderEphHex".toByteArray(Charsets.UTF_8)
+                    val senderVerified = AuraIdentityManager.verifyAndTrustPeer(
+                        applicationContext,
+                        senderUserId,
+                        senderIdentityPubKey,
+                        senderTranscript,
+                        senderSignature
+                    )
+                    if (!senderVerified) {
+                        Log.e(TAG, "Sender cryptographic authentication failed for peer: $senderUserId")
+                        sendJsonResponse(403, "Forbidden", JSONObject().apply {
+                            put("error", "Sender cryptographic authentication failed: invalid signature or identity key mismatch")
+                        })
+                        return@withContext
+                    }
 
                     val token = UUID.randomUUID().toString()
                     val expiresAt = System.currentTimeMillis() + 60000L
 
                     var receiverEphHex: String? = null
-                    val sessionKey: ByteArray? = if (senderEphHex.isNotEmpty()) {
-                        try {
-                            val receiverEph = AuraAeadCrypto.generateEphemeralKeyPair()
-                            val receiverSec1 = AuraAeadCrypto.exportSec1PublicKey(receiverEph.public as ECPublicKey)
-                            receiverEphHex = receiverSec1.toHex()
-                            val senderPub = AuraAeadCrypto.importSec1PublicKey(senderEphHex.decodeHex())
-                            val sharedSecret = AuraAeadCrypto.agreeEphemeral(receiverEph.private, senderPub)
-                            AuraAeadCrypto.deriveDirectionalSessionKeys(sharedSecret, xferId, token, senderUserId, deviceId)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "ECDH agreement failed in prepare-upload: ${e.message}")
-                            null
-                        }
-                    } else {
-                        AuraAeadCrypto.deriveSessionKey(token, xferId, senderUserId, deviceId)
+                    var receiverSig: String? = null
+                    val sessionKey: ByteArray? = try {
+                        val receiverEph = AuraAeadCrypto.generateEphemeralKeyPair()
+                        val receiverSec1 = AuraAeadCrypto.exportSec1PublicKey(receiverEph.public as ECPublicKey)
+                        receiverEphHex = receiverSec1.toHex()
+                        val senderPub = AuraAeadCrypto.importSec1PublicKey(senderEphHex.decodeHex())
+                        val sharedSecret = AuraAeadCrypto.agreeEphemeral(receiverEph.private, senderPub)
+                        val sKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
+                            sharedSecret,
+                            xferId,
+                            token,
+                            senderUserId,
+                            deviceId,
+                            senderIdentityPubKey,
+                            AuraIdentityManager.getPublicKeyHex()
+                        )
+
+                        // Sign receiver transcript
+                        val receiverTranscript = "auradrop/auth/v1/receiver:auradrop/tcp/2:$xferId:$token:$senderUserId:$deviceId:$senderEphHex:$receiverEphHex".toByteArray(Charsets.UTF_8)
+                        receiverSig = AuraIdentityManager.sign(receiverTranscript)
+                        sKey
+                    } catch (e: Exception) {
+                        Log.e(TAG, "ECDH agreement / signature failed in prepare-upload: ${e.message}")
+                        null
+                    }
+
+                    if (sessionKey == null || receiverEphHex == null || receiverSig == null) {
+                        sendJsonResponse(500, "Internal Server Error", JSONObject().apply {
+                            put("error", "Failed to negotiate cryptographic session keys")
+                        })
+                        return@withContext
                     }
 
                     val sessionMeta = HttpUploadSession(
@@ -1801,6 +1938,10 @@ class MainActivity : FlutterActivity() {
                             put("receiverUserId", deviceId)
                             if (receiverEphHex != null) {
                                 put("receiverEphPubKey", receiverEphHex)
+                            }
+                            put("receiverIdentityPubKey", AuraIdentityManager.getPublicKeyHex())
+                            if (receiverSig != null) {
+                                put("receiverSignature", receiverSig)
                             }
                         })
                     } else {
@@ -2490,6 +2631,8 @@ class MainActivity : FlutterActivity() {
 
             val senderEph = AuraAeadCrypto.generateEphemeralKeyPair()
             val senderSec1 = AuraAeadCrypto.exportSec1PublicKey(senderEph.public as ECPublicKey)
+            val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$transferId:$deviceId:${senderSec1.toHex()}".toByteArray(Charsets.UTF_8)
+            val senderSig = AuraIdentityManager.sign(senderTranscript)
 
             val prepPayload = JSONObject().apply {
                 put("transferId", transferId)
@@ -2500,6 +2643,8 @@ class MainActivity : FlutterActivity() {
                 put("senderUserId", deviceId)
                 put("senderName", senderDisplayName)
                 put("senderEphPubKey", senderSec1.toHex())
+                put("senderIdentityPubKey", AuraIdentityManager.getPublicKeyHex())
+                put("senderSignature", senderSig)
             }
 
             prepConn.outputStream.use { os ->
@@ -2530,13 +2675,48 @@ class MainActivity : FlutterActivity() {
             }
 
             val receiverEphHex = prepResp.optString("receiverEphPubKey", "")
-            val sessionKey = if (receiverEphHex.isNotEmpty()) {
-                val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
-                val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
-                AuraAeadCrypto.deriveDirectionalSessionKeys(sharedSecret, transferId, token, deviceId, receiverId)
-            } else {
-                AuraAeadCrypto.deriveSessionKey(token, transferId, deviceId, receiverId)
+            val receiverIdentityPubKey = prepResp.optString("receiverIdentityPubKey", "")
+            val receiverSignature = prepResp.optString("receiverSignature", "")
+            val protocol = prepResp.optString("protocol", "auradrop/tcp/2")
+
+            if (receiverEphHex.isEmpty() || receiverIdentityPubKey.isEmpty() || receiverSignature.isEmpty()) {
+                Log.e(TAG, "Recipient omitted required cryptographic credentials")
+                sendEvent("transferError", mapOf(
+                    "transferId" to transferId,
+                    "error" to "Recipient omitted required cryptographic credentials. Plaintext transfer is forbidden."
+                ))
+                return false
             }
+
+            // Verify receiver signature over receiver transcript and validate against Trust Store
+            val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$transferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
+            val authOk = AuraIdentityManager.verifyAndTrustPeer(
+                applicationContext,
+                receiverId,
+                receiverIdentityPubKey,
+                receiverTranscript,
+                receiverSignature
+            )
+            if (!authOk) {
+                Log.e(TAG, "Cryptographic receiver authentication failed!")
+                sendEvent("transferError", mapOf(
+                    "transferId" to transferId,
+                    "error" to "Cryptographic receiver authentication failed! MitM or identity spoofing detected."
+                ))
+                return false
+            }
+
+            val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
+            val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
+            val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
+                sharedSecret,
+                transferId,
+                token,
+                deviceId,
+                receiverId,
+                AuraIdentityManager.getPublicKeyHex(),
+                receiverIdentityPubKey
+            )
 
             sendEvent("dataChannelState", mapOf(
                 "transferId" to transferId,
