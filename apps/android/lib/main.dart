@@ -416,7 +416,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           'fileName': fileName,
           'totalBytes': fileSize,
           'totalFiles': 1,
-          'sas': 'Direct Wi-Fi',
+          'sas': req['sasCode']?.toString() ?? req['sas']?.toString() ?? '',
+          'sasCode': req['sasCode']?.toString() ?? req['sas']?.toString() ?? '',
+          'isFirstContact': req['isFirstContact'] == true,
         });
       });
 
@@ -613,6 +615,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
         break;
 
+      case 'incomingShareRequest':
       case 'transferRequest':
         HapticFeedback.heavyImpact();
         setState(() => _transferState = TransferState.waitingForAccept);
@@ -652,6 +655,12 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           },
         );
         _showIncomingTransferModal(event);
+        break;
+
+      case 'transferVerification':
+        HapticFeedback.heavyImpact();
+        setState(() => _transferState = TransferState.waitingForAccept);
+        _showOutboundVerificationModal(event);
         break;
 
       case 'peerExpired':
@@ -1034,7 +1043,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     final senderName = req['senderName']?.toString() ?? 'Nearby Peer';
     final totalFiles = req['totalFiles']?.toString() ?? '1';
     final totalBytes = (req['totalBytes'] as num?)?.toInt() ?? 0;
-    final sas = req['sas']?.toString() ?? '4829 1049 8812 3726';
+    final sas = req['sasCode']?.toString() ?? req['sas']?.toString() ?? '';
+    final isFirstContact = req['isFirstContact'] == true;
 
     showModalBottomSheet(
       context: context,
@@ -1048,7 +1058,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           decoration: BoxDecoration(
             color: theme.cardBackground,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: theme.border, width: 1.0),
+            border: Border.all(
+              color: isFirstContact ? Colors.amber.withValues(alpha: 0.4) : theme.border,
+              width: isFirstContact ? 1.5 : 1.0,
+            ),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1087,30 +1100,87 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 style: TextStyle(fontSize: 13, color: theme.textSecondary),
               ),
               const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.background,
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(color: theme.border),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.shield_outlined, size: 14, color: theme.textSecondary),
-                    const SizedBox(width: 8),
-                    Text(
-                      'SAS: $sas',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontFamily: 'monospace',
-                        fontWeight: FontWeight.w600,
-                        color: theme.textPrimary,
+              if (isFirstContact) ...[
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: theme.isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.shield_outlined, size: 16, color: Colors.amber),
+                          const SizedBox(width: 8),
+                          Text(
+                            'First-Contact Security Verification',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.amber.shade400),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 8),
+                      Text(
+                        'Compare this code with the screen on $senderName:',
+                        style: TextStyle(fontSize: 12, color: theme.textSecondary),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: theme.isDark ? Colors.black : Colors.white,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: theme.border),
+                        ),
+                        child: Text(
+                          sas.isNotEmpty ? sas : '--- ---',
+                          style: TextStyle(
+                            fontSize: 22,
+                            fontFamily: 'monospace',
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 4.0,
+                            color: theme.textPrimary,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Confirm only if the exact same 6 digits appear on both devices.',
+                        style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
-              ),
+              ] else if (sas.isNotEmpty) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: theme.background,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: theme.border),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.shield_outlined, size: 14, color: theme.textSecondary),
+                      const SizedBox(width: 8),
+                      Text(
+                        'SAS: $sas',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
+                          color: theme.textPrimary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 24),
               Row(
                 children: [
@@ -1119,10 +1189,15 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                       height: 48,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6),
-                          foregroundColor: theme.isDark ? Colors.white : Colors.black87,
+                          backgroundColor: isFirstContact
+                              ? Colors.red.withValues(alpha: 0.15)
+                              : (theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6)),
+                          foregroundColor: isFirstContact ? Colors.red.shade400 : (theme.isDark ? Colors.white : Colors.black87),
                           elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            side: isFirstContact ? BorderSide(color: Colors.red.withValues(alpha: 0.3)) : BorderSide.none,
+                          ),
                         ),
                         onPressed: () async {
                           Navigator.pop(ctx);
@@ -1130,7 +1205,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                           setState(() => _transferState = TransferState.idle);
                           await NativeBridgeService.declineTransfer(transferId);
                         },
-                        child: const Text('Decline', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                        child: Text(
+                          isFirstContact ? 'Mismatched / Reject' : 'Decline',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                        ),
                       ),
                     ),
                   ),
@@ -1166,7 +1244,148 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                           });
                           await NativeBridgeService.acceptTransfer(transferId);
                         },
-                        child: const Text('Accept', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+                        child: Text(
+                          isFirstContact ? 'Codes Match — Confirm' : 'Accept',
+                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showOutboundVerificationModal(Map<dynamic, dynamic> req) {
+    final theme = AuraTheme.of(context);
+    final transferId = req['transferId']?.toString() ?? '';
+    final peerName = req['peerName']?.toString() ?? 'Remote Peer';
+    final fileName = req['fileName']?.toString() ?? 'File';
+    final totalBytes = (req['totalBytes'] as num?)?.toInt() ?? 0;
+    final sas = req['sasCode']?.toString() ?? req['sas']?.toString() ?? '';
+
+    showModalBottomSheet(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Container(
+          margin: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: theme.cardBackground,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.amber.withValues(alpha: 0.4), width: 1.5),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: theme.textSecondary.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.shield_outlined, size: 18, color: Colors.amber),
+                  const SizedBox(width: 8),
+                  Text(
+                    'First-Contact Security Verification',
+                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.amber.shade400),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Sending $fileName • ${_formatBytes(totalBytes)}',
+                style: TextStyle(fontSize: 13, color: theme.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Compare this code with the screen on $peerName:',
+                style: TextStyle(fontSize: 13, color: theme.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                decoration: BoxDecoration(
+                  color: theme.isDark ? Colors.black : Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: theme.border),
+                ),
+                child: Center(
+                  child: Text(
+                    sas.isNotEmpty ? sas : '--- ---',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 4.0,
+                      color: theme.textPrimary,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Confirm only if the exact same 6 digits appear on both devices.',
+                style: TextStyle(fontSize: 11, color: theme.textSecondary),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              Row(
+                children: [
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red.withValues(alpha: 0.15),
+                          foregroundColor: Colors.red.shade400,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(24),
+                            side: BorderSide(color: Colors.red.withValues(alpha: 0.3)),
+                          ),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          setState(() => _transferState = TransferState.idle);
+                          await NativeBridgeService.confirmVerification(transferId, false);
+                        },
+                        child: const Text('Mismatched / Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SizedBox(
+                      height: 48,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF0A84FF),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+                        ),
+                        onPressed: () async {
+                          Navigator.pop(ctx);
+                          await NativeBridgeService.confirmVerification(transferId, true);
+                        },
+                        child: const Text('Codes Match — Confirm', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
                       ),
                     ),
                   ),

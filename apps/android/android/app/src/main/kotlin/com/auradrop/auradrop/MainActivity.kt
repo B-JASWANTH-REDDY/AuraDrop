@@ -664,6 +664,7 @@ class MainActivity : FlutterActivity() {
     private val activePeerChatSockets = ConcurrentHashMap<String, Socket>()
     private val httpUploadSessions = ConcurrentHashMap<String, HttpUploadSession>()
     private val pendingHttpDecisions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val pendingOutboundVerifications = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -897,6 +898,21 @@ class MainActivity : FlutterActivity() {
                 "declineTransfer" -> {
                     val transferId = call.argument<String>("transferId") ?: ""
                     declineIncomingTransfer(transferId)
+                    result.success(true)
+                }
+                "confirmTransferVerification" -> {
+                    val transferId = call.argument<String>("transferId") ?: ""
+                    val confirmed = call.argument<Boolean>("confirmed") ?: false
+                    val outboundDeferred = pendingOutboundVerifications.remove(transferId)
+                    if (outboundDeferred != null) {
+                        outboundDeferred.complete(confirmed)
+                    } else {
+                        if (confirmed) {
+                            acceptIncomingTransfer(transferId)
+                        } else {
+                            declineIncomingTransfer(transferId)
+                        }
+                    }
                     result.success(true)
                 }
                 "cancelTransfer" -> {
@@ -2191,7 +2207,7 @@ class MainActivity : FlutterActivity() {
                     )
 
                     // Also dispatch Flutter event so in-app receive dialog displays if user is in app
-                    sendEvent("incomingShareRequest", mapOf(
+                    val shareEventMap = mapOf(
                         "requestId" to xferId,
                         "transferId" to xferId,
                         "senderName" to senderName,
@@ -2199,10 +2215,14 @@ class MainActivity : FlutterActivity() {
                         "firstFileName" to fileName,
                         "fileName" to fileName,
                         "totalBytes" to fileSize,
+                        "totalFiles" to 1,
                         "fileCount" to 1,
+                        "sas" to sasCodeStr,
                         "sasCode" to sasCodeStr,
                         "isFirstContact" to isFirstContact
-                    ))
+                    )
+                    sendEvent("incomingShareRequest", shareEventMap)
+                    sendEvent("transferRequest", shareEventMap)
 
                     // Await user's explicit Accept or Decline decision (up to 60 seconds)
                     val accepted = withTimeoutOrNull(60000L) {
@@ -2849,6 +2869,7 @@ class MainActivity : FlutterActivity() {
     private fun cancelTransferSession(transferId: String) {
         if (transferId.isNotBlank()) {
             pendingHttpDecisions.remove(transferId)?.complete(false)
+            pendingOutboundVerifications.remove(transferId)?.complete(false)
             activeTransfersState[transferId]?.isCancelled?.set(true)
             try { activeClientSockets.remove(transferId)?.close() } catch (_: Exception) {}
             try { activeHttpConnections.remove(transferId)?.disconnect() } catch (_: Exception) {}
@@ -2857,6 +2878,8 @@ class MainActivity : FlutterActivity() {
         } else {
             pendingHttpDecisions.values.forEach { it.complete(false) }
             pendingHttpDecisions.clear()
+            pendingOutboundVerifications.values.forEach { it.complete(false) }
+            pendingOutboundVerifications.clear()
             activeTransfersState.values.forEach { it.isCancelled.set(true) }
             activeClientSockets.values.forEach { try { it.close() } catch (_: Exception) {} }
             activeHttpConnections.values.forEach { try { it.disconnect() } catch (_: Exception) {} }
@@ -2879,7 +2902,7 @@ class MainActivity : FlutterActivity() {
     // ----------------------------------------------------
     // TCP Streaming Client (High-Throughput Sender)
     // ----------------------------------------------------
-    private fun trySendFilesViaHttp(
+    private suspend fun trySendFilesViaHttp(
         targetIp: String,
         targetPort: Int,
         filesList: List<Map<String, Any>>,
@@ -3008,8 +3031,46 @@ class MainActivity : FlutterActivity() {
                 senderSec1.toHex(),
                 receiverEphHex
             )
+            val remoteSas = prepResp.optString("sasCode", "")
+            if (remoteSas.isNotEmpty() && remoteSas != sasCode) {
+                val err = "Security SAS verification code mismatch! Local: [$sasCode], Recipient: [$remoteSas]. Potential MitM attack detected."
+                Log.e(TAG, err)
+                sendEvent("transferError", mapOf(
+                    "transferId" to transferId,
+                    "error" to err
+                ))
+                return false
+            }
+
             if (isFirstContact) {
-                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Verification SAS: [$sasCode]")
+                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Verification SAS: [$sasCode] - Awaiting user confirmation")
+                val verificationDeferred = CompletableDeferred<Boolean>()
+                pendingOutboundVerifications[transferId] = verificationDeferred
+
+                sendEvent("transferVerification", mapOf(
+                    "transferId" to transferId,
+                    "peerName" to targetIp,
+                    "fileName" to fileName,
+                    "totalBytes" to fileSize,
+                    "sasCode" to sasCode,
+                    "isFirstContact" to true,
+                    "isSender" to true
+                ))
+
+                val confirmed = withTimeoutOrNull(60000L) {
+                    verificationDeferred.await()
+                } ?: false
+                pendingOutboundVerifications.remove(transferId)
+
+                if (!confirmed) {
+                    val err = "Transfer aborted: First-contact security verification code was not confirmed or verification timed out."
+                    Log.w(TAG, err)
+                    sendEvent("transferError", mapOf(
+                        "transferId" to transferId,
+                        "error" to err
+                    ))
+                    return false
+                }
             }
             val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
                 sharedSecret,

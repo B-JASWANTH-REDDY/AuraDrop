@@ -213,6 +213,16 @@ class NativeBridgeService {
     } catch (_) {}
   }
 
+  static Future<void> confirmVerification(String transferId, bool confirmed) async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _channel.invokeMethod('confirmTransferVerification', {
+        'transferId': transferId,
+        'confirmed': confirmed,
+      });
+    } catch (_) {}
+  }
+
   static Future<void> cancelTransfer(String transferId) async {
     if (!Platform.isAndroid) return;
     try {
