@@ -1,10 +1,105 @@
 //! Cryptographic utilities for AuraDrop authenticated TCP streaming
-//! Provides HKDF-SHA256 key derivation and AES-256-GCM AEAD chunk encryption/decryption.
+//! Provides Diffie-Hellman Ephemeral (ECDH P-256) key agreement,
+//! directional HKDF-SHA256 session key derivation, and AES-256-GCM AEAD chunk encryption/decryption.
 
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use ring::agreement::{self, EphemeralPrivateKey, UnparsedPublicKey, ECDH_P256};
 use ring::hkdf;
+use ring::rand::SystemRandom;
 
-/// Derive a 256-bit symmetric session key bound to peer identities and transfer ID using HKDF-SHA256.
+/// Directional symmetric keys derived from ECDH shared secret and transfer metadata.
+#[derive(Debug, Clone)]
+pub struct DirectionalSessionKeys {
+    /// 256-bit symmetric key for streaming data from sender to receiver.
+    pub sender_to_receiver: [u8; 32],
+    /// 256-bit symmetric key for streaming data or control frames from receiver to sender.
+    pub receiver_to_sender: [u8; 32],
+}
+
+/// Ephemeral Diffie-Hellman Key Exchange (NIST P-256 / secp256r1)
+pub struct EphemeralKeyExchange {
+    private_key: EphemeralPrivateKey,
+    public_key_bytes: Vec<u8>,
+}
+
+impl EphemeralKeyExchange {
+    /// Generate a fresh, cryptographically secure ephemeral P-256 key pair.
+    pub fn generate() -> Result<Self, String> {
+        let rng = SystemRandom::new();
+        let private_key = EphemeralPrivateKey::generate(&ECDH_P256, &rng)
+            .map_err(|e| format!("Failed to generate ephemeral ECDH key: {:?}", e))?;
+        let public_key_bytes = private_key
+            .compute_public_key()
+            .map_err(|e| format!("Failed to compute public key: {:?}", e))?
+            .as_ref()
+            .to_vec();
+        Ok(Self {
+            private_key,
+            public_key_bytes,
+        })
+    }
+
+    /// Return the raw SEC1 uncompressed public key bytes (65 bytes: 0x04 || X || Y).
+    pub fn public_key_bytes(&self) -> &[u8] {
+        &self.public_key_bytes
+    }
+
+    /// Return hex-encoded public key.
+    pub fn public_key_hex(&self) -> String {
+        hex::encode(&self.public_key_bytes)
+    }
+
+    /// Perform Diffie-Hellman key agreement with peer's public key bytes.
+    /// Returns the 32-byte shared secret (DH x-coordinate).
+    pub fn complete(self, peer_public_key_bytes: &[u8]) -> Result<Vec<u8>, String> {
+        let peer_pub = UnparsedPublicKey::new(&ECDH_P256, peer_public_key_bytes);
+        agreement::agree_ephemeral(
+            self.private_key,
+            &peer_pub,
+            |key_material| key_material.to_vec(),
+        )
+        .map_err(|e| format!("ECDH key agreement failed (invalid peer public key or curve mismatch): {:?}", e))
+    }
+}
+
+/// Derive directional 256-bit symmetric session keys using HKDF-SHA256.
+/// Bound to the ECDH shared secret, transfer ID, authorization token, and peer device identities.
+pub fn derive_directional_session_keys(
+    shared_secret_ecdh: &[u8],
+    transfer_id: &str,
+    token: &str,
+    sender_id: &str,
+    receiver_id: &str,
+) -> DirectionalSessionKeys {
+    let mut salt_bytes = Vec::with_capacity(transfer_id.len() + 1 + token.len());
+    salt_bytes.extend_from_slice(transfer_id.as_bytes());
+    salt_bytes.push(b':');
+    salt_bytes.extend_from_slice(token.as_bytes());
+
+    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, &salt_bytes);
+    let prk = salt.extract(shared_secret_ecdh);
+
+    // Directional info: sender -> receiver
+    let s2r_info_str = format!("auradrop/tcp/aead/v2/sender-to-receiver:{}:{}", sender_id, receiver_id);
+    let s2r_info = [s2r_info_str.as_bytes()];
+    let okm_s2r = prk.expand(&s2r_info, &AES_256_GCM).expect("HKDF expand s2r failed");
+    let mut s2r_key = [0u8; 32];
+    okm_s2r.fill(&mut s2r_key).expect("HKDF fill s2r failed");
+
+    // Directional info: receiver -> sender
+    let r2s_info_str = format!("auradrop/tcp/aead/v2/receiver-to-sender:{}:{}", sender_id, receiver_id);
+    let r2s_info = [r2s_info_str.as_bytes()];
+    let okm_r2s = prk.expand(&r2s_info, &AES_256_GCM).expect("HKDF expand r2s failed");
+    let mut r2s_key = [0u8; 32];
+    okm_r2s.fill(&mut r2s_key).expect("HKDF fill r2s failed");
+
+    DirectionalSessionKeys {
+        sender_to_receiver: s2r_key,
+        receiver_to_sender: r2s_key,
+    }
+}
+
+/// Legacy single-key derivation for fallback compatibility
 pub fn derive_session_key(
     token: &str,
     transfer_id: &str,
@@ -82,17 +177,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_aead_encrypt_decrypt_roundtrip() {
-        let key = derive_session_key("secret_token_123", "xfer_001", "sender_a", "receiver_b");
+    fn test_ecdh_key_exchange_and_directional_derivation() {
+        // Alice generates ephemeral ECDH
+        let alice_eph = EphemeralKeyExchange::generate().unwrap();
+        let alice_pub = alice_eph.public_key_bytes().to_vec();
+
+        // Bob generates ephemeral ECDH
+        let bob_eph = EphemeralKeyExchange::generate().unwrap();
+        let bob_pub = bob_eph.public_key_bytes().to_vec();
+
+        // Alice and Bob perform key agreement
+        let alice_shared = alice_eph.complete(&bob_pub).unwrap();
+        let bob_shared = bob_eph.complete(&alice_pub).unwrap();
+
+        assert_eq!(alice_shared, bob_shared, "ECDH shared secrets must be identical");
+        assert_eq!(alice_shared.len(), 32, "P-256 shared secret must be 32 bytes");
+
+        // Alice and Bob derive directional keys
+        let alice_keys = derive_directional_session_keys(
+            &alice_shared,
+            "transfer_abc",
+            "token_xyz",
+            "device_alice",
+            "device_bob",
+        );
+        let bob_keys = derive_directional_session_keys(
+            &bob_shared,
+            "transfer_abc",
+            "token_xyz",
+            "device_alice",
+            "device_bob",
+        );
+
+        assert_eq!(alice_keys.sender_to_receiver, bob_keys.sender_to_receiver);
+        assert_eq!(alice_keys.receiver_to_sender, bob_keys.receiver_to_sender);
+        assert_ne!(alice_keys.sender_to_receiver, alice_keys.receiver_to_sender);
+
+        // Verify AEAD encryption with sender_to_receiver key
         let nonce = create_chunk_nonce(1337, 0);
-        let aad = b"xfer_001:0";
-        let plaintext = b"Hello, secure authenticated AuraDrop file transfer payload!";
+        let aad = b"transfer_abc:0";
+        let plaintext = b"Classified bulk file data";
 
-        let encrypted = encrypt_chunk(&key, &nonce, aad, plaintext).expect("Encryption failed");
-        assert_ne!(&encrypted[..plaintext.len()], plaintext);
-
-        let decrypted = decrypt_chunk(&key, &nonce, aad, &encrypted).expect("Decryption failed");
-        assert_eq!(&decrypted[..], plaintext);
+        let ciphertext = encrypt_chunk(&alice_keys.sender_to_receiver, &nonce, aad, plaintext).unwrap();
+        let decrypted = decrypt_chunk(&bob_keys.sender_to_receiver, &nonce, aad, &ciphertext).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 
     #[test]

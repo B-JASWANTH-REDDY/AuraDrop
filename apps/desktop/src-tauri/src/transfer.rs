@@ -86,6 +86,7 @@ pub struct SessionMetadata {
     pub sender_name: String,
     pub sender_id: String,
     pub is_consumed: bool,
+    pub session_key: [u8; 32],
 }
 
 #[derive(Clone)]
@@ -223,6 +224,11 @@ impl TransferService {
             .build()
             .unwrap_or_default();
 
+        // Ephemeral ECDH keypair generation for forward-secret key agreement
+        let sender_eph = crate::crypto::EphemeralKeyExchange::generate()
+            .map_err(|e| format!("ECDH key generation failed: {}", e))?;
+        let sender_eph_pub_hex = sender_eph.public_key_hex();
+
         // Step 1: Handshake with recipient on /prepare-upload
         let prep_url = format!("http://{}:{}/api/auradrop/v1/prepare-upload", peer_ip, peer_port);
         let prep_body = json!({
@@ -232,6 +238,7 @@ impl TransferService {
             "sha256": sha256_hash,
             "senderUserId": my_id,
             "senderName": my_name,
+            "senderEphPubKey": sender_eph_pub_hex,
         });
 
         let prep_res = client
@@ -258,6 +265,36 @@ impl TransferService {
             return Err(err);
         }
 
+        // Strict fail-closed policy: plaintext fallback is completely forbidden
+        if prep_data.encryption.as_deref() != Some("aead-aes256-gcm") {
+            let err = "Recipient rejected authenticated encryption. Plaintext transfer is forbidden.".to_string();
+            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+            return Err(err);
+        }
+
+        let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
+        let session_key = if let Some(receiver_eph_hex) = prep_data.receiver_eph_pub_key.as_ref() {
+            let receiver_pub_bytes = hex::decode(receiver_eph_hex)
+                .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
+            let shared_secret = sender_eph.complete(&receiver_pub_bytes)
+                .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
+            let directional = crate::crypto::derive_directional_session_keys(
+                &shared_secret,
+                &transfer_id,
+                &prep_data.one_time_token,
+                &my_id,
+                target_peer_id,
+            );
+            directional.sender_to_receiver
+        } else {
+            crate::crypto::derive_session_key(
+                &prep_data.one_time_token,
+                &transfer_id,
+                &my_id,
+                target_peer_id,
+            )
+        };
+
         // Step 2: Stream file bytes over authenticated TCP with AEAD encryption and bounded buffer (512 KiB)
         // Clean URL: Token and transfer ID removed from query string per security requirements
         let upload_url = format!("http://{}:{}/api/auradrop/v1/upload", peer_ip, peer_port);
@@ -272,15 +309,6 @@ impl TransferService {
         let mut transferred = 0u64;
         let start_time = Instant::now();
         let mut last_emit = Instant::now();
-
-        // Cryptographically derive 256-bit symmetric session key bound to sender and receiver IDs
-        let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
-        let session_key = crate::crypto::derive_session_key(
-            &prep_data.one_time_token,
-            &transfer_id,
-            &my_id,
-            target_peer_id,
-        );
 
         let tid_for_stream = transfer_id.clone();
         let mut chunk_counter = 0u64;
@@ -564,6 +592,43 @@ async fn handle_prepare_upload(
     let token = Uuid::new_v4().to_string();
     let expires_at = Utc::now().timestamp_millis() + 60000; // 60s TTL
     let sender_name = payload.sender_name.clone().unwrap_or_else(|| payload.sender_user_id.clone());
+    let my_id = service.identity.get_device_id().await;
+
+    // Perform authenticated ECDH key agreement if sender supplied ephemeral public key
+    let (session_key, receiver_eph_pub_hex) = if let Some(sender_eph_hex) = payload.sender_eph_pub_key.as_ref() {
+        let sender_pub_bytes = hex::decode(sender_eph_hex).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid sender ephemeral key hex: {}", e)})),
+            )
+        })?;
+        let receiver_eph = crate::crypto::EphemeralKeyExchange::generate().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Receiver ECDH keygen error: {}", e)})),
+            )
+        })?;
+        let pub_hex = receiver_eph.public_key_hex();
+        let shared_secret = receiver_eph.complete(&sender_pub_bytes).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("ECDH agreement error: {}", e)})),
+            )
+        })?;
+        let directional = crate::crypto::derive_directional_session_keys(
+            &shared_secret,
+            &payload.transfer_id,
+            &token,
+            &payload.sender_user_id,
+            &my_id,
+        );
+        (directional.sender_to_receiver, Some(pub_hex))
+    } else {
+        (
+            crate::crypto::derive_session_key(&token, &payload.transfer_id, &payload.sender_user_id, &my_id),
+            None,
+        )
+    };
 
     let meta = SessionMetadata {
         transfer_id: payload.transfer_id.clone(),
@@ -575,6 +640,7 @@ async fn handle_prepare_upload(
         sender_name: sender_name.clone(),
         sender_id: payload.sender_user_id.clone(),
         is_consumed: false,
+        session_key,
     };
 
     service
@@ -597,16 +663,16 @@ async fn handle_prepare_upload(
         .file_id
         .unwrap_or_else(|| payload.transfer_id.clone());
 
-    let my_id = service.identity.get_device_id().await;
     Ok(Json(PrepareUploadResponse {
         accepted: true,
         transfer_id: payload.transfer_id,
         file_id,
         one_time_token: token,
         expires_at,
-        protocol: "auradrop/tcp/1".to_string(),
+        protocol: "auradrop/tcp/2".to_string(),
         encryption: Some("aead-aes256-gcm".to_string()),
         receiver_id: Some(my_id),
+        receiver_eph_pub_key: receiver_eph_pub_hex,
         quic_port: None,
         cert_fingerprint: None,
     }))
@@ -737,23 +803,21 @@ async fn handle_upload(
         }
     };
 
-    // Determine encryption mode
+    // Enforce authenticated encryption: plaintext transfers are strictly rejected (Fail Closed)
     let encryption_mode = headers
         .get("x-encryption")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("none");
-    let is_aead = encryption_mode == "aead-aes256-gcm";
-    let my_device_id = service.identity.get_device_id().await;
-    let session_key = if is_aead {
-        Some(crate::crypto::derive_session_key(
-            &session.token,
-            &session.transfer_id,
-            &session.sender_id,
-            &my_device_id,
-        ))
-    } else {
-        None
-    };
+    if encryption_mode != "aead-aes256-gcm" {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        service.sessions.write().await.remove(&transfer_id);
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Plaintext transfer rejected: authenticated encryption (aead-aes256-gcm) is required"})),
+        ));
+    }
+
+    let session_key = session.session_key;
 
     // Bounded buffer for backpressured async disk writing (512 KiB)
     let mut writer = tokio::io::BufWriter::with_capacity(512 * 1024, temp_file);
@@ -779,56 +843,64 @@ async fn handle_upload(
             }
         };
 
-        if is_aead {
-            stream_buf.extend_from_slice(&chunk);
+        stream_buf.extend_from_slice(&chunk);
 
-            while stream_buf.len() >= 16 {
-                let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
-                let total_frame_len = 4 + 12 + payload_len;
-                if stream_buf.len() < total_frame_len {
-                    break; // Await more network bytes to complete frame
-                }
+        while stream_buf.len() >= 16 {
+            let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
+            
+            // Validate payload bounds: max 1 MiB chunk + 16-byte tag, min 16-byte tag
+            if payload_len < 16 || payload_len > (1024 * 1024 + 16) {
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                service.sessions.write().await.remove(&transfer_id);
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("Frame payload length out of bounds: {} bytes", payload_len)})),
+                ));
+            }
 
-                let mut nonce = [0u8; 12];
-                nonce.copy_from_slice(&stream_buf[4..16]);
-                let ciphertext_and_tag = &stream_buf[16..total_frame_len];
-                let aad = format!("{}:{}", session.transfer_id, chunk_index);
+            let total_frame_len = 4 + 12 + payload_len;
+            if stream_buf.len() < total_frame_len {
+                break; // Await more network bytes to complete frame
+            }
 
-                let plaintext = match crate::crypto::decrypt_chunk(
-                    session_key.as_ref().unwrap(),
-                    &nonce,
-                    aad.as_bytes(),
-                    ciphertext_and_tag,
-                ) {
-                    Ok(pt) => pt,
-                    Err(e) => {
-                        let _ = tokio::fs::remove_file(&temp_file_path).await;
-                        service.sessions.write().await.remove(&transfer_id);
-                        return Err((
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(json!({"error": format!("AEAD integrity authentication failure: {}", e)})),
-                        ));
-                    }
-                };
+            let mut nonce = [0u8; 12];
+            nonce.copy_from_slice(&stream_buf[4..16]);
 
-                if let Err(e) = writer.write_all(&plaintext).await {
+            // Validate strict sequence numbering to prevent chunk replay, out-of-order, or repeated chunks
+            let chunk_seq = u64::from_be_bytes([
+                nonce[4], nonce[5], nonce[6], nonce[7],
+                nonce[8], nonce[9], nonce[10], nonce[11],
+            ]);
+            if chunk_seq != chunk_index {
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                service.sessions.write().await.remove(&transfer_id);
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({"error": format!("Chunk sequence violation: received chunk index {}, expected {}", chunk_seq, chunk_index)})),
+                ));
+            }
+
+            let ciphertext_and_tag = &stream_buf[16..total_frame_len];
+            let aad = format!("{}:{}", session.transfer_id, chunk_index);
+
+            let plaintext = match crate::crypto::decrypt_chunk(
+                &session_key,
+                &nonce,
+                aad.as_bytes(),
+                ciphertext_and_tag,
+            ) {
+                Ok(pt) => pt,
+                Err(e) => {
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
                     service.sessions.write().await.remove(&transfer_id);
                     return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({"error": format!("Disk write error: {}", e)})),
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        Json(json!({"error": format!("AEAD integrity authentication failure: {}", e)})),
                     ));
                 }
+            };
 
-                hasher.update(&plaintext);
-                transferred += plaintext.len() as u64;
-                chunk_index += 1;
-
-                stream_buf.drain(0..total_frame_len);
-            }
-        } else {
-            // Write directly with backpressure (plain stream fallback)
-            if let Err(e) = writer.write_all(&chunk).await {
+            if let Err(e) = writer.write_all(&plaintext).await {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
                 service.sessions.write().await.remove(&transfer_id);
                 return Err((
@@ -837,8 +909,11 @@ async fn handle_upload(
                 ));
             }
 
-            hasher.update(&chunk);
-            transferred += chunk.len() as u64;
+            hasher.update(&plaintext);
+            transferred += plaintext.len() as u64;
+            chunk_index += 1;
+
+            stream_buf.drain(0..total_frame_len);
         }
 
         if transferred > session.file_size {

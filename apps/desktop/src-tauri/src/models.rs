@@ -95,6 +95,8 @@ pub struct PrepareUploadRequest {
     pub supported_protocols: Option<Vec<String>>,
     #[serde(default)]
     pub client_quic_port: Option<u16>,
+    #[serde(default)]
+    pub sender_eph_pub_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +112,8 @@ pub struct PrepareUploadResponse {
     pub encryption: Option<String>,
     #[serde(default)]
     pub receiver_id: Option<String>,
+    #[serde(default)]
+    pub receiver_eph_pub_key: Option<String>,
     #[serde(default)]
     pub quic_port: Option<u16>,
     #[serde(default)]

@@ -34,18 +34,103 @@ import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
+import java.math.BigInteger
 import java.net.*
 import java.nio.ByteBuffer
-import java.security.MessageDigest
+import java.security.*
+import java.security.interfaces.ECPublicKey
+import java.security.spec.*
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
+import javax.crypto.KeyAgreement
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+fun String.decodeHex(): ByteArray {
+    check(length % 2 == 0) { "Must have an even length" }
+    val bytes = ByteArray(length / 2)
+    for (i in 0 until length step 2) {
+        bytes[i / 2] = substring(i, i + 2).toInt(16).toByte()
+    }
+    return bytes
+}
+
+fun ByteArray.toHex(): String {
+    val result = StringBuilder(size * 2)
+    for (b in this) {
+        result.append(String.format("%02x", b))
+    }
+    return result.toString()
+}
+
 object AuraAeadCrypto {
+    fun generateEphemeralKeyPair(): KeyPair {
+        val kpg = KeyPairGenerator.getInstance("EC")
+        kpg.initialize(ECGenParameterSpec("secp256r1"))
+        return kpg.generateKeyPair()
+    }
+
+    fun exportSec1PublicKey(pubKey: ECPublicKey): ByteArray {
+        val x = pubKey.w.affineX.toByteArray()
+        val y = pubKey.w.affineY.toByteArray()
+        val sec1 = ByteArray(65)
+        sec1[0] = 0x04.toByte()
+
+        val xLen = Math.min(32, x.size)
+        val xSrc = Math.max(0, x.size - 32)
+        System.arraycopy(x, xSrc, sec1, 1 + (32 - xLen), xLen)
+
+        val yLen = Math.min(32, y.size)
+        val ySrc = Math.max(0, y.size - 32)
+        System.arraycopy(y, ySrc, sec1, 33 + (32 - yLen), yLen)
+        return sec1
+    }
+
+    fun importSec1PublicKey(sec1: ByteArray): PublicKey {
+        require(sec1.size == 65 && sec1[0] == 0x04.toByte()) { "Invalid SEC1 P-256 public key" }
+        val xBytes = sec1.copyOfRange(1, 33)
+        val yBytes = sec1.copyOfRange(33, 65)
+        val point = ECPoint(BigInteger(1, xBytes), BigInteger(1, yBytes))
+
+        val kpg = KeyPairGenerator.getInstance("EC")
+        kpg.initialize(ECGenParameterSpec("secp256r1"))
+        val ecSpec = (kpg.generateKeyPair().public as ECPublicKey).params
+
+        val pubSpec = ECPublicKeySpec(point, ecSpec)
+        return KeyFactory.getInstance("EC").generatePublic(pubSpec)
+    }
+
+    fun agreeEphemeral(privateKey: PrivateKey, peerPublicKey: PublicKey): ByteArray {
+        val ka = KeyAgreement.getInstance("ECDH")
+        ka.init(privateKey)
+        ka.doPhase(peerPublicKey, true)
+        return ka.generateSecret()
+    }
+
+    fun deriveDirectionalSessionKeys(
+        sharedSecret: ByteArray,
+        transferId: String,
+        token: String,
+        senderId: String,
+        receiverId: String
+    ): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        val saltBytes = "$transferId:$token".toByteArray(Charsets.UTF_8)
+        mac.init(SecretKeySpec(saltBytes, "HmacSHA256"))
+        val prk = mac.doFinal(sharedSecret)
+
+        val prkKey = SecretKeySpec(prk, "HmacSHA256")
+        mac.init(prkKey)
+        val s2rInfo = "auradrop/tcp/aead/v2/sender-to-receiver:$senderId:$receiverId".toByteArray(Charsets.UTF_8)
+        mac.update(s2rInfo)
+        mac.update(0x01.toByte())
+        val okm = mac.doFinal()
+        return okm.copyOf(32)
+    }
+
     fun deriveSessionKey(token: String, transferId: String, senderId: String, receiverId: String): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")
         val saltKey = SecretKeySpec(transferId.toByteArray(Charsets.UTF_8), "HmacSHA256")
@@ -127,7 +212,8 @@ data class HttpUploadSession(
     val senderName: String,
     val senderUserId: String,
     val expiresAt: Long,
-    val isConsumed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false)
+    val isConsumed: java.util.concurrent.atomic.AtomicBoolean = java.util.concurrent.atomic.AtomicBoolean(false),
+    val sessionKey: ByteArray? = null
 )
 
 object PeerRegistry {
@@ -1607,9 +1693,27 @@ class MainActivity : FlutterActivity() {
                     val sha256 = prepJson.optString("sha256", "")
                     val senderName = prepJson.optString("senderName", prepJson.optString("senderUserId", "Nearby Device"))
                     val senderUserId = prepJson.optString("senderUserId", "peer")
+                    val senderEphHex = prepJson.optString("senderEphPubKey", "")
 
                     val token = UUID.randomUUID().toString()
                     val expiresAt = System.currentTimeMillis() + 60000L
+
+                    var receiverEphHex: String? = null
+                    val sessionKey: ByteArray? = if (senderEphHex.isNotEmpty()) {
+                        try {
+                            val receiverEph = AuraAeadCrypto.generateEphemeralKeyPair()
+                            val receiverSec1 = AuraAeadCrypto.exportSec1PublicKey(receiverEph.public as ECPublicKey)
+                            receiverEphHex = receiverSec1.toHex()
+                            val senderPub = AuraAeadCrypto.importSec1PublicKey(senderEphHex.decodeHex())
+                            val sharedSecret = AuraAeadCrypto.agreeEphemeral(receiverEph.private, senderPub)
+                            AuraAeadCrypto.deriveDirectionalSessionKeys(sharedSecret, xferId, token, senderUserId, deviceId)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "ECDH agreement failed in prepare-upload: ${e.message}")
+                            null
+                        }
+                    } else {
+                        AuraAeadCrypto.deriveSessionKey(token, xferId, senderUserId, deviceId)
+                    }
 
                     val sessionMeta = HttpUploadSession(
                         transferId = xferId,
@@ -1619,7 +1723,8 @@ class MainActivity : FlutterActivity() {
                         sha256 = sha256,
                         senderName = senderName,
                         senderUserId = senderUserId,
-                        expiresAt = expiresAt
+                        expiresAt = expiresAt,
+                        sessionKey = sessionKey
                     )
                     httpUploadSessions[xferId] = sessionMeta
 
@@ -1690,10 +1795,13 @@ class MainActivity : FlutterActivity() {
                             put("fileId", xferId)
                             put("oneTimeToken", token)
                             put("expiresAt", expiresAt)
-                            put("protocol", "auradrop/tcp/1")
+                            put("protocol", "auradrop/tcp/2")
                             put("encryption", "aead-aes256-gcm")
                             put("receiverId", deviceId)
                             put("receiverUserId", deviceId)
+                            if (receiverEphHex != null) {
+                                put("receiverEphPubKey", receiverEphHex)
+                            }
                         })
                     } else {
                         cancelSystemIncomingShareNotification(xferId)
@@ -1787,13 +1895,22 @@ class MainActivity : FlutterActivity() {
                     val tempPartFile = File(downloadsDir, ".${fileName}.${xferId}.part")
                     val digest = MessageDigest.getInstance("SHA-256")
 
-                    val isAead = headers["x-encryption"] == "aead-aes256-gcm"
-                    val sessionKey = if (isAead) {
-                        AuraAeadCrypto.deriveSessionKey(sessionMeta.token, sessionMeta.transferId, sessionMeta.senderUserId, deviceId)
-                    } else null
+                    if (headers["x-encryption"] != "aead-aes256-gcm") {
+                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
+                            put("error", "Authenticated encryption (aead-aes256-gcm) is required. Plaintext transfer is forbidden.")
+                        })
+                        return@withContext
+                    }
+
+                    val sessionKey = sessionMeta.sessionKey
+                    if (sessionKey == null) {
+                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
+                            put("error", "Session key unavailable or cryptographic agreement failed")
+                        })
+                        return@withContext
+                    }
 
                     var totalWritten = 0L
-                    val buf = ByteArray(512 * 1024)
                     val startTime = System.currentTimeMillis()
                     var lastProgressTime = 0L
 
@@ -1812,103 +1929,64 @@ class MainActivity : FlutterActivity() {
                     val fos = FileOutputStream(tempPartFile)
                     try {
                         val bos = BufferedOutputStream(fos, 512 * 1024)
-                        if (isAead && sessionKey != null) {
-                            val dis = DataInputStream(input)
-                            var chunkIndex = 0L
-                            while (totalWritten < fileSize) {
-                                if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
-                                    Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
-                                    break
-                                }
-                                val payloadLen = dis.readInt()
-                                if (payloadLen <= 0 || payloadLen > 10 * 1024 * 1024) break
-                                val nonce = ByteArray(12)
-                                dis.readFully(nonce)
-                                val ciphertextAndTag = ByteArray(payloadLen)
-                                dis.readFully(ciphertextAndTag)
-
-                                val aad = "$xferId:$chunkIndex".toByteArray(Charsets.UTF_8)
-                                val plaintext = AuraAeadCrypto.decryptChunk(sessionKey, nonce, aad, ciphertextAndTag)
-
-                                bos.write(plaintext)
-                                digest.update(plaintext)
-                                totalWritten += plaintext.size
-                                chunkIndex++
-
-                                val now = System.currentTimeMillis()
-                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
-                                    lastProgressTime = now
-                                    val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                                    val speed = (totalWritten / elapsedSec).toLong()
-                                    val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                                    val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
-
-                                    sendEvent("transferProgress", mapOf(
-                                        "transferId" to xferId,
-                                        "state" to "TRANSFERRING",
-                                        "fileName" to fileName,
-                                        "totalBytes" to fileSize,
-                                        "transferredBytes" to totalWritten,
-                                        "speedBytesPerSec" to speed,
-                                        "etaSeconds" to eta,
-                                        "percentage" to pct
-                                    ))
-
-                                    updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
-                                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                                        transferId = xferId,
-                                        fileName = fileName,
-                                        progressPercent = pct,
-                                        transferredBytes = totalWritten,
-                                        totalBytes = fileSize,
-                                        speedBytesPerSec = speed,
-                                        isSending = false
-                                    )
-                                }
+                        val dis = DataInputStream(input)
+                        var chunkIndex = 0L
+                        while (totalWritten < fileSize) {
+                            if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
+                                Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
+                                break
                             }
-                        } else {
-                            while (totalWritten < fileSize) {
-                                if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
-                                    Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
-                                    break
-                                }
-                                val toRead = Math.min(buf.size.toLong(), fileSize - totalWritten).toInt()
-                                val r = input.read(buf, 0, toRead)
-                                if (r == -1) break
-                                bos.write(buf, 0, r)
-                                digest.update(buf, 0, r)
-                                totalWritten += r
+                            val payloadLen = dis.readInt()
+                            if (payloadLen < 16 || payloadLen > 1024 * 1024 + 16) {
+                                throw IOException("Invalid chunk payload length: $payloadLen")
+                            }
+                            val nonce = ByteArray(12)
+                            dis.readFully(nonce)
+                            val bbNonce = ByteBuffer.wrap(nonce)
+                            val nonceChunkSeq = bbNonce.getLong(4)
+                            if (nonceChunkSeq != chunkIndex) {
+                                throw SecurityException("Chunk sequence counter mismatch: expected $chunkIndex, got $nonceChunkSeq")
+                            }
+                            val ciphertextAndTag = ByteArray(payloadLen)
+                            dis.readFully(ciphertextAndTag)
 
-                                val now = System.currentTimeMillis()
-                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
-                                    lastProgressTime = now
-                                    val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                                    val speed = (totalWritten / elapsedSec).toLong()
-                                    val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                                    val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
+                            val aad = "$xferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                            val plaintext = AuraAeadCrypto.decryptChunk(sessionKey, nonce, aad, ciphertextAndTag)
 
-                                    sendEvent("transferProgress", mapOf(
-                                        "transferId" to xferId,
-                                        "state" to "TRANSFERRING",
-                                        "fileName" to fileName,
-                                        "totalBytes" to fileSize,
-                                        "transferredBytes" to totalWritten,
-                                        "speedBytesPerSec" to speed,
-                                        "etaSeconds" to eta,
-                                        "percentage" to pct
-                                    ))
+                            bos.write(plaintext)
+                            digest.update(plaintext)
+                            totalWritten += plaintext.size
+                            chunkIndex++
 
-                                    updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
-                                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                                        transferId = xferId,
-                                        fileName = fileName,
-                                        progressPercent = pct,
-                                        transferredBytes = totalWritten,
-                                        totalBytes = fileSize,
-                                        speedBytesPerSec = speed,
-                                        isSending = false
-                                    )
-                                }
+                            val now = System.currentTimeMillis()
+                            if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
+                                lastProgressTime = now
+                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                                val speed = (totalWritten / elapsedSec).toLong()
+                                val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
+
+                                sendEvent("transferProgress", mapOf(
+                                    "transferId" to xferId,
+                                    "state" to "TRANSFERRING",
+                                    "fileName" to fileName,
+                                    "totalBytes" to fileSize,
+                                    "transferredBytes" to totalWritten,
+                                    "speedBytesPerSec" to speed,
+                                    "etaSeconds" to eta,
+                                    "percentage" to pct
+                                ))
+
+                                updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
+                                AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                    transferId = xferId,
+                                    fileName = fileName,
+                                    progressPercent = pct,
+                                    transferredBytes = totalWritten,
+                                    totalBytes = fileSize,
+                                    speedBytesPerSec = speed,
+                                    isSending = false
+                                )
                             }
                         }
                         bos.flush()
@@ -2410,6 +2488,9 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("Content-Type", "application/json")
             }
 
+            val senderEph = AuraAeadCrypto.generateEphemeralKeyPair()
+            val senderSec1 = AuraAeadCrypto.exportSec1PublicKey(senderEph.public as ECPublicKey)
+
             val prepPayload = JSONObject().apply {
                 put("transferId", transferId)
                 put("fileId", transferId)
@@ -2418,6 +2499,7 @@ class MainActivity : FlutterActivity() {
                 put("sha256", "")
                 put("senderUserId", deviceId)
                 put("senderName", senderDisplayName)
+                put("senderEphPubKey", senderSec1.toHex())
             }
 
             prepConn.outputStream.use { os ->
@@ -2436,9 +2518,25 @@ class MainActivity : FlutterActivity() {
             val token = prepResp.optString("oneTimeToken", "")
             val encryptionMode = prepResp.optString("encryption", "")
             val receiverId = prepResp.optString("receiverId", prepResp.optString("receiverUserId", ""))
-            val isAead = encryptionMode == "aead-aes256-gcm"
-            val peerQuicPort = prepResp.optInt("quicPort", 0)
-            val peerCertFp = prepResp.optString("certFingerprint", "")
+
+            // Strict fail-closed policy: reject if recipient declined authenticated encryption
+            if (encryptionMode != "aead-aes256-gcm") {
+                Log.e(TAG, "Recipient rejected authenticated encryption. Plaintext transfer is forbidden.")
+                sendEvent("transferError", mapOf(
+                    "transferId" to transferId,
+                    "error" to "Recipient rejected authenticated encryption. Plaintext transfer is forbidden."
+                ))
+                return false
+            }
+
+            val receiverEphHex = prepResp.optString("receiverEphPubKey", "")
+            val sessionKey = if (receiverEphHex.isNotEmpty()) {
+                val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
+                val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
+                AuraAeadCrypto.deriveDirectionalSessionKeys(sharedSecret, transferId, token, deviceId, receiverId)
+            } else {
+                AuraAeadCrypto.deriveSessionKey(token, transferId, deviceId, receiverId)
+            }
 
             sendEvent("dataChannelState", mapOf(
                 "transferId" to transferId,
@@ -2459,9 +2557,7 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("x-sender-id", deviceId)
                 setRequestProperty("x-file-name", fileName)
                 setRequestProperty("x-file-size", fileSize.toString())
-                if (isAead) {
-                    setRequestProperty("x-encryption", "aead-aes256-gcm")
-                }
+                setRequestProperty("x-encryption", "aead-aes256-gcm")
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
@@ -2475,10 +2571,6 @@ class MainActivity : FlutterActivity() {
 
             val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
                 ?: throw FileNotFoundException("Could not open URI: $uriStr")
-
-            val sessionKey = if (isAead) {
-                AuraAeadCrypto.deriveSessionKey(token, transferId, deviceId, receiverId)
-            } else null
 
             try {
                 inputStream.use { fis ->
@@ -2495,18 +2587,14 @@ class MainActivity : FlutterActivity() {
                             val r = fis.read(buf, 0, toRead)
                             if (r == -1) break
 
-                            if (isAead && sessionKey != null) {
-                                val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
-                                val aad = "$transferId:$chunkIndex".toByteArray(Charsets.UTF_8)
-                                val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
-                                chunkIndex++
+                            val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
+                            val aad = "$transferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                            val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
+                            chunkIndex++
 
-                                dos.writeInt(ciphertextAndTag.size)
-                                dos.write(nonce)
-                                dos.write(ciphertextAndTag)
-                            } else {
-                                bos.write(buf, 0, r)
-                            }
+                            dos.writeInt(ciphertextAndTag.size)
+                            dos.write(nonce)
+                            dos.write(ciphertextAndTag)
                             sentBytes += r
 
                             val now = System.currentTimeMillis()
