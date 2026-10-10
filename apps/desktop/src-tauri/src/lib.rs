@@ -7,10 +7,10 @@ pub mod network;
 pub mod transfer;
 
 use commands::{
-    cancel_transfer, check_for_updates, get_all_chat_conversations, get_chat_history, get_local_info,
-    get_nearby_peers, open_downloads_folder, open_file, open_url, pick_files, probe_device_ip,
-    rescan_network, send_chat_message, send_files_to_peer, set_device_name, show_file_in_folder,
-    AppState,
+    cancel_transfer, check_for_updates, confirm_transfer_verification, get_all_chat_conversations,
+    get_chat_history, get_local_info, get_nearby_peers, open_downloads_folder, open_file,
+    open_url, pick_files, probe_device_ip, rescan_network, send_chat_message, send_files_to_peer,
+    set_device_name, show_file_in_folder, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -72,6 +72,7 @@ pub fn run() {
             pick_files,
             send_files_to_peer,
             cancel_transfer,
+            confirm_transfer_verification,
             open_downloads_folder,
             rescan_network,
             probe_device_ip,

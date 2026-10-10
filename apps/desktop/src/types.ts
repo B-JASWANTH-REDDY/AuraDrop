@@ -36,7 +36,7 @@ export interface TransferProgressPayload {
   speedMbps: number;
   etaSeconds: number;
   isIncoming: boolean;
-  status: 'transferring' | 'completed' | 'failed' | 'canceled';
+  status: 'transferring' | 'completed' | 'failed' | 'canceled' | 'awaiting_verification';
   peerName: string;
   error?: string | null;
   filePath?: string | null;

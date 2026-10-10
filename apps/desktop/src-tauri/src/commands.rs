@@ -392,3 +392,13 @@ pub async fn open_url(url: String) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn confirm_transfer_verification(
+    state: tauri::State<'_, AppState>,
+    transfer_id: String,
+    confirmed: bool,
+) -> Result<bool, String> {
+    let result = state.transfer.confirm_verification(&transfer_id, confirmed).await;
+    Ok(result)
+}
+

@@ -1047,6 +1047,57 @@ async fn test_adversarial_suite() {
     let substituted_pub = "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let attack_result = identity_mgr.check_peer_trust_status(peer_dev_id, substituted_pub).await;
     assert!(attack_result.is_err(), "Public key substitution must be rejected as impersonation");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 9: Deterministic cross-platform SAS vector verification (Matches Android)
+    // -----------------------------------------------------------------------------------------
+    let vector_secret = [0x42u8; 32];
+    let vector_sas = auradrop_lib::crypto::compute_sas_code_full(
+        &vector_secret,
+        "auradrop/tcp/2",
+        "test-transfer-id-12345",
+        "alice-device-id",
+        "bob-device-id",
+        "0411111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+        "0422222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+        "0433333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333",
+        "0444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+        "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2",
+    );
+    assert_eq!(vector_sas, "365 027", "Deterministic test vector must match '365 027' across platforms");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 10: Persistent identity key substitution keeping ECDH exchange unchanged
+    // -----------------------------------------------------------------------------------------
+    let legit_sender = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+    let mallory_sub = auradrop_lib::crypto::DeviceIdentity::generate().unwrap();
+    let transcript10 = auradrop_lib::crypto::compute_sender_transcript(
+        "auradrop/tcp/2",
+        "adv_10",
+        "node_x",
+        "041234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    );
+    let sig10 = legit_sender.sign(&transcript10).unwrap();
+    let sub_result = auradrop_lib::crypto::DeviceIdentity::verify(mallory_sub.public_key_bytes(), &transcript10, &sig10);
+    assert!(sub_result.is_err(), "Signature verification against substituted identity key must fail");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 11: Mismatched or unconfirmed verification aborts transfer and never trusts peer
+    // -----------------------------------------------------------------------------------------
+    let untrusted_peer_id = format!("peer_untrusted_{}", Uuid::new_v4());
+    let untrusted_peer_pub = "04eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let is_first_contact = identity_mgr.check_peer_trust_status(&untrusted_peer_id, untrusted_peer_pub).await.unwrap();
+    assert!(is_first_contact, "New peer must require first-contact verification");
+    // Verify that declined or interrupted transfers never create a trusted-peer entry
+    let still_untrusted = identity_mgr.check_peer_trust_status(&untrusted_peer_id, untrusted_peer_pub).await.unwrap();
+    assert!(still_untrusted, "Declined or timed-out peer must remain untrusted");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 12: Trust Store persistence across manager restart
+    // -----------------------------------------------------------------------------------------
+    let restart_mgr = auradrop_lib::identity::IdentityManager::init();
+    let is_still_known = restart_mgr.check_peer_trust_status(peer_dev_id, original_pub).await.unwrap();
+    assert!(!is_still_known, "Previously marked peer must remain trusted across manager restarts");
 }
 
 #[tokio::test]

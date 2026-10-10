@@ -166,6 +166,17 @@ export const App: React.FC = () => {
     setActiveTransfer(null);
   };
 
+  const handleConfirmVerification = async (transferId: string, confirmed: boolean) => {
+    try {
+      await invoke('confirm_transfer_verification', { transferId, confirmed });
+      if (!confirmed) {
+        setActiveTransfer(null);
+      }
+    } catch (err) {
+      console.error('Failed to confirm verification:', err);
+    }
+  };
+
   const handleSaveDeviceName = (name: string) => {
     invoke('set_device_name', { name })
       .then(() => {
@@ -361,6 +372,7 @@ export const App: React.FC = () => {
         onCancel={handleCancelTransfer}
         onOpenFolder={handleOpenDownloads}
         onOpenFile={handleOpenFile}
+        onConfirmVerification={handleConfirmVerification}
       />
 
       {chatPeer && (

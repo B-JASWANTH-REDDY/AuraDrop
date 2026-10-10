@@ -165,7 +165,89 @@ pub fn compute_receiver_transcript(
     ).into_bytes()
 }
 
-/// Compute 6-digit Short Authentication String (SAS) from ECDH shared secret and handshake commitments
+pub const SAS_PROTOCOL_VERSION: &str = "auradrop/tcp/2";
+pub const SAS_SECURITY_PARAMS: &str = "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2";
+
+/// Canonical, unambiguous length-prefixed session transcript for Short Authentication String (SAS)
+pub fn compute_canonical_sas_transcript(
+    protocol_version: &str,
+    transfer_id: &str,
+    sender_id: &str,
+    receiver_id: &str,
+    sender_identity_pub_hex: &str,
+    receiver_identity_pub_hex: &str,
+    sender_eph_pub_hex: &str,
+    receiver_eph_pub_hex: &str,
+    security_params: &str,
+) -> Vec<u8> {
+    let mut transcript = Vec::with_capacity(512);
+    // Explicit 16-byte magic header with null terminator
+    transcript.extend_from_slice(b"auradrop/sas/v2\0");
+
+    let s_id_lower = sender_identity_pub_hex.to_ascii_lowercase();
+    let r_id_lower = receiver_identity_pub_hex.to_ascii_lowercase();
+    let s_eph_lower = sender_eph_pub_hex.to_ascii_lowercase();
+    let r_eph_lower = receiver_eph_pub_hex.to_ascii_lowercase();
+
+    let fields: [&[u8]; 9] = [
+        protocol_version.as_bytes(),
+        transfer_id.as_bytes(),
+        sender_id.as_bytes(),
+        receiver_id.as_bytes(),
+        s_id_lower.as_bytes(),
+        r_id_lower.as_bytes(),
+        s_eph_lower.as_bytes(),
+        r_eph_lower.as_bytes(),
+        security_params.as_bytes(),
+    ];
+
+    for field in &fields {
+        let len = field.len() as u32;
+        transcript.extend_from_slice(&len.to_be_bytes());
+        transcript.extend_from_slice(field);
+    }
+
+    transcript
+}
+
+/// Compute 6-digit Short Authentication String (SAS) from canonical transcript and ECDH shared secret
+pub fn compute_sas_code_full(
+    shared_secret_ecdh: &[u8],
+    protocol_version: &str,
+    transfer_id: &str,
+    sender_id: &str,
+    receiver_id: &str,
+    sender_identity_pub_hex: &str,
+    receiver_identity_pub_hex: &str,
+    sender_eph_pub_hex: &str,
+    receiver_eph_pub_hex: &str,
+    security_params: &str,
+) -> String {
+    let transcript = compute_canonical_sas_transcript(
+        protocol_version,
+        transfer_id,
+        sender_id,
+        receiver_id,
+        sender_identity_pub_hex,
+        receiver_identity_pub_hex,
+        sender_eph_pub_hex,
+        receiver_eph_pub_hex,
+        security_params,
+    );
+    let transcript_hash = ring::digest::digest(&ring::digest::SHA256, &transcript);
+
+    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, transcript_hash.as_ref());
+    let prk = salt.extract(shared_secret_ecdh);
+    let info = [b"auradrop/sas/v2:numeric-sas".as_slice()];
+    let okm = prk.expand(&info, &AES_256_GCM).expect("HKDF expand sas failed");
+    let mut okm_bytes = [0u8; 32];
+    okm.fill(&mut okm_bytes).expect("fill sas bytes failed");
+
+    let num = u32::from_be_bytes([okm_bytes[0], okm_bytes[1], okm_bytes[2], okm_bytes[3]]) % 1_000_000;
+    format!("{:03} {:03}", num / 1000, num % 1000)
+}
+
+/// Compute 6-digit Short Authentication String (SAS) using standard protocol version and security parameters
 pub fn compute_sas_code(
     shared_secret_ecdh: &[u8],
     transfer_id: &str,
@@ -176,25 +258,18 @@ pub fn compute_sas_code(
     sender_eph_pub_hex: &str,
     receiver_eph_pub_hex: &str,
 ) -> String {
-    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, transfer_id.as_bytes());
-    let prk = salt.extract(shared_secret_ecdh);
-    let info_str = format!(
-        "auradrop/sas/v1:{}:{}:{}:{}:{}:{}",
+    compute_sas_code_full(
+        shared_secret_ecdh,
+        SAS_PROTOCOL_VERSION,
+        transfer_id,
         sender_id,
         receiver_id,
         sender_identity_pub_hex,
         receiver_identity_pub_hex,
         sender_eph_pub_hex,
-        receiver_eph_pub_hex
-    );
-    let info_bytes = info_str.into_bytes();
-    let info_slice = [info_bytes.as_slice()];
-    let okm = prk.expand(&info_slice, &AES_256_GCM).expect("HKDF expand sas failed");
-    let mut okm_bytes = [0u8; 32];
-    okm.fill(&mut okm_bytes).expect("fill sas bytes failed");
-
-    let num = u32::from_be_bytes([okm_bytes[0], okm_bytes[1], okm_bytes[2], okm_bytes[3]]) % 1_000_000;
-    format!("{:03} {:03}", num / 1000, num % 1000)
+        receiver_eph_pub_hex,
+        SAS_SECURITY_PARAMS,
+    )
 }
 
 /// Derive directional 256-bit symmetric session keys using HKDF-SHA256.
@@ -556,5 +631,206 @@ mod tests {
         let key2 = derive_session_key("token_xyz", "xfer_1", "peer_A", "peer_ATTACKER");
 
         assert_ne!(key1, key2, "Session keys for different peer identities must not match");
+    }
+
+    #[test]
+    fn test_sas_deterministic_test_vector() {
+        // Shared deterministic vector for cross-platform validation
+        let shared_secret = [0x42u8; 32];
+        let protocol_version = "auradrop/tcp/2";
+        let transfer_id = "test-transfer-id-12345";
+        let sender_id = "alice-device-id";
+        let receiver_id = "bob-device-id";
+        let sender_identity = "0411111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111";
+        let receiver_identity = "0422222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222";
+        let sender_eph = "0433333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333";
+        let receiver_eph = "0444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444";
+        let security_params = "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2";
+
+        let sas = compute_sas_code_full(
+            &shared_secret,
+            protocol_version,
+            transfer_id,
+            sender_id,
+            receiver_id,
+            sender_identity,
+            receiver_identity,
+            sender_eph,
+            receiver_eph,
+            security_params,
+        );
+
+        println!("[DETERMINISTIC TEST VECTOR] SAS: {}", sas);
+        assert_eq!(sas.len(), 7);
+        assert_eq!(sas.chars().nth(3), Some(' '));
+
+        // Deterministic check: must remain identical across all platforms and test runs
+        let sas_second_run = compute_sas_code_full(
+            &shared_secret,
+            protocol_version,
+            transfer_id,
+            sender_id,
+            receiver_id,
+            sender_identity,
+            receiver_identity,
+            sender_eph,
+            receiver_eph,
+            security_params,
+        );
+        assert_eq!(sas, sas_second_run);
+    }
+
+    #[test]
+    fn test_sas_field_sensitivity_matrix() {
+        let base_secret = [0x55u8; 32];
+        let base_proto = "auradrop/tcp/2";
+        let base_tid = "tid_base";
+        let base_sid = "sender_base";
+        let base_rid = "receiver_base";
+        let base_s_id_pub = "04aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let base_r_id_pub = "04bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let base_s_eph_pub = "04cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let base_r_eph_pub = "04dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let base_sec_params = "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2";
+
+        let base_sas = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+
+        // 1. Shared secret altered
+        let mut alt_secret = base_secret;
+        alt_secret[0] ^= 0x01;
+        let sas1 = compute_sas_code_full(
+            &alt_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas1, "Altered shared secret must change SAS");
+
+        // 2. Protocol version altered
+        let sas2 = compute_sas_code_full(
+            &base_secret, "auradrop/tcp/3", base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas2, "Altered protocol version must change SAS");
+
+        // 3. Transfer ID altered
+        let sas3 = compute_sas_code_full(
+            &base_secret, base_proto, "tid_alt", base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas3, "Altered transfer ID must change SAS");
+
+        // 4. Sender ID altered
+        let sas4 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, "sender_alt", base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas4, "Altered sender ID must change SAS");
+
+        // 5. Receiver ID altered
+        let sas5 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, "receiver_alt",
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas5, "Altered receiver ID must change SAS");
+
+        // 6. Sender identity public key altered
+        let sas6 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            "0411111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+            base_r_id_pub, base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas6, "Altered sender identity key must change SAS");
+
+        // 7. Receiver identity public key altered
+        let sas7 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub,
+            "0422222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            base_s_eph_pub, base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas7, "Altered receiver identity key must change SAS");
+
+        // 8. Sender ephemeral key altered
+        let sas8 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub,
+            "0433333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333",
+            base_r_eph_pub, base_sec_params
+        );
+        assert_ne!(base_sas, sas8, "Altered sender ephemeral key must change SAS");
+
+        // 9. Receiver ephemeral key altered
+        let sas9 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub,
+            "0444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444",
+            base_sec_params
+        );
+        assert_ne!(base_sas, sas9, "Altered receiver ephemeral key must change SAS");
+
+        // 10. Security params altered
+        let sas10 = compute_sas_code_full(
+            &base_secret, base_proto, base_tid, base_sid, base_rid,
+            base_s_id_pub, base_r_id_pub, base_s_eph_pub, base_r_eph_pub,
+            "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v3"
+        );
+        assert_ne!(base_sas, sas10, "Altered security params must change SAS");
+    }
+
+    #[test]
+    fn test_identity_substitution_and_transcript_tamper_matrix() {
+        let sender_dev = DeviceIdentity::generate().unwrap();
+        let receiver_dev = DeviceIdentity::generate().unwrap();
+        let attacker_dev = DeviceIdentity::generate().unwrap();
+
+        let tid = "xfer_matrix_1";
+        let token = "token_matrix_77";
+        let sid = "sender_device_id";
+        let rid = "receiver_device_id";
+        let eph_pub = "041234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let recv_eph_pub = "04fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+
+        // 1. Legitimate sender signature
+        let transcript = compute_sender_transcript("auradrop/tcp/2", tid, sid, eph_pub);
+        let sig = sender_dev.sign(&transcript).unwrap();
+        assert!(DeviceIdentity::verify(sender_dev.public_key_bytes(), &transcript, &sig).is_ok());
+
+        // 2. Identity key substitution (Attacker uses same transcript & ECDH, verifies with attacker public key)
+        let verify_substituted = DeviceIdentity::verify(attacker_dev.public_key_bytes(), &transcript, &sig);
+        assert!(verify_substituted.is_err(), "Signature must fail against substituted identity key");
+
+        // 3. Ephemeral public key substitution
+        let tampered_eph_transcript = compute_sender_transcript("auradrop/tcp/2", tid, sid,
+            "0499999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999"
+        );
+        let verify_tampered_eph = DeviceIdentity::verify(sender_dev.public_key_bytes(), &tampered_eph_transcript, &sig);
+        assert!(verify_tampered_eph.is_err(), "Tampered ephemeral key must fail signature verification");
+
+        // 4. Protocol version substitution
+        let tampered_proto = compute_sender_transcript("auradrop/tcp/99", tid, sid, eph_pub);
+        let verify_tampered_proto = DeviceIdentity::verify(sender_dev.public_key_bytes(), &tampered_proto, &sig);
+        assert!(verify_tampered_proto.is_err(), "Altered protocol version must fail signature verification");
+
+        // 5. Transfer ID substitution
+        let tampered_tid = compute_sender_transcript("auradrop/tcp/2", "xfer_fake", sid, eph_pub);
+        let verify_tampered_tid = DeviceIdentity::verify(sender_dev.public_key_bytes(), &tampered_tid, &sig);
+        assert!(verify_tampered_tid.is_err(), "Altered transfer ID must fail signature verification");
+
+        // 6. Modified signature bytes (bit flip)
+        let mut tampered_sig = sig.clone();
+        tampered_sig[10] ^= 0x01;
+        let verify_bitflip = DeviceIdentity::verify(sender_dev.public_key_bytes(), &transcript, &tampered_sig);
+        assert!(verify_bitflip.is_err(), "Bit-flipped signature must fail verification");
+
+        // 7. Legitimate receiver transcript and signature
+        let recv_transcript = compute_receiver_transcript("auradrop/tcp/2", tid, token, sid, rid, eph_pub, recv_eph_pub);
+        let recv_sig = receiver_dev.sign(&recv_transcript).unwrap();
+        assert!(DeviceIdentity::verify(receiver_dev.public_key_bytes(), &recv_transcript, &recv_sig).is_ok());
+
+        // 8. Receiver identity key substitution
+        let verify_recv_sub = DeviceIdentity::verify(attacker_dev.public_key_bytes(), &recv_transcript, &recv_sig);
+        assert!(verify_recv_sub.is_err(), "Receiver signature must fail against attacker public key");
     }
 }

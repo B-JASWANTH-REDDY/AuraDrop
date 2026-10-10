@@ -1,6 +1,6 @@
 import React from 'react';
 import { TransferProgressPayload } from '../types';
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, AlertCircle, FileText, X } from 'lucide-react';
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, AlertCircle, FileText, X, ShieldAlert, Check } from 'lucide-react';
 
 interface TransferModalProps {
   transfer: TransferProgressPayload | null;
@@ -8,6 +8,7 @@ interface TransferModalProps {
   onCancel?: () => void;
   onOpenFolder: () => void;
   onOpenFile?: (fileName: string) => void;
+  onConfirmVerification?: (transferId: string, confirmed: boolean) => void;
 }
 
 export const TransferModal: React.FC<TransferModalProps> = ({
@@ -16,6 +17,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({
   onCancel,
   onOpenFolder,
   onOpenFile,
+  onConfirmVerification,
 }) => {
   if (!transfer) return null;
 
@@ -108,17 +110,52 @@ export const TransferModal: React.FC<TransferModalProps> = ({
 
         {/* Security Verification SAS Code */}
         {transfer.sasCode && (
-          <div className="p-3 rounded-xl bg-neutral-900 border border-white/20 text-xs text-white flex items-center justify-between mb-4">
-            <div className="flex flex-col">
-              <span className="font-semibold text-white">Security Code</span>
-              <span className="text-[11px] text-neutral-400">
-                {transfer.isFirstContact ? 'First-Contact Peer Verification' : 'Cryptographically Verified'}
+          transfer.isFirstContact && transfer.status === 'awaiting_verification' ? (
+            <div className="p-4 rounded-2xl bg-neutral-900 border border-amber-500/30 text-white mb-5 animate-fade-in">
+              <div className="flex items-center gap-2 mb-2 text-amber-400 font-semibold text-xs">
+                <ShieldAlert className="w-4 h-4" />
+                <span>First-Contact Security Verification</span>
+              </div>
+              <p className="text-xs text-neutral-300 mb-3">
+                Compare this code with the screen on <strong className="text-white">{transfer.peerName}</strong>:
+              </p>
+              <div className="py-2.5 px-4 bg-black border border-white/20 rounded-xl text-center mb-3">
+                <span className="font-mono text-xl tracking-[0.25em] font-bold text-white select-all">
+                  {transfer.sasCode}
+                </span>
+              </div>
+              <p className="text-[11px] text-neutral-400 mb-3 text-center">
+                Confirm only if the exact same 6 digits appear on both devices.
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, true)}
+                  className="flex-1 py-2.5 rounded-xl bg-white hover:bg-neutral-200 text-black text-xs font-bold transition-all shadow-md flex items-center justify-center gap-1.5 active:scale-95"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Codes Match — Confirm</span>
+                </button>
+                <button
+                  onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, false)}
+                  className="py-2.5 px-3 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 text-xs font-semibold transition-all active:scale-95"
+                >
+                  Mismatched / Reject
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="p-3 rounded-xl bg-neutral-900 border border-white/20 text-xs text-white flex items-center justify-between mb-4">
+              <div className="flex flex-col">
+                <span className="font-semibold text-white">Security Code</span>
+                <span className="text-[11px] text-neutral-400">
+                  {transfer.isFirstContact ? 'First-Contact Peer Verification' : 'Cryptographically Verified'}
+                </span>
+              </div>
+              <span className="font-mono text-sm tracking-widest bg-white text-black px-2.5 py-1 rounded-lg font-bold">
+                {transfer.sasCode}
               </span>
             </div>
-            <span className="font-mono text-sm tracking-widest bg-white text-black px-2.5 py-1 rounded-lg font-bold">
-              {transfer.sasCode}
-            </span>
-          </div>
+          )
         )}
 
         {/* Telemetry Stats */}

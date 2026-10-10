@@ -39,6 +39,7 @@ import java.io.*
 import java.math.BigInteger
 import java.net.*
 import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.security.*
 import java.security.interfaces.ECPublicKey
 import java.security.spec.*
@@ -47,7 +48,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
+import javax.crypto.KeyGenerator
 import javax.crypto.Mac
+import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
@@ -176,6 +179,95 @@ object AuraAeadCrypto {
         return cipher.doFinal(ciphertextAndTag)
     }
 
+    const val SAS_PROTOCOL_VERSION = "auradrop/tcp/2"
+    const val SAS_SECURITY_PARAMS = "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2"
+
+    fun computeCanonicalSasTranscript(
+        protocolVersion: String,
+        transferId: String,
+        senderId: String,
+        receiverId: String,
+        senderIdentityPubHex: String,
+        receiverIdentityPubHex: String,
+        senderEphPubHex: String,
+        receiverEphPubHex: String,
+        securityParams: String
+    ): ByteArray {
+        val transcript = ByteArrayOutputStream(512)
+        transcript.write("auradrop/sas/v2\u0000".toByteArray(Charsets.UTF_8))
+
+        val fields = listOf(
+            protocolVersion,
+            transferId,
+            senderId,
+            receiverId,
+            senderIdentityPubHex.lowercase(),
+            receiverIdentityPubHex.lowercase(),
+            senderEphPubHex.lowercase(),
+            receiverEphPubHex.lowercase(),
+            securityParams
+        )
+
+        for (field in fields) {
+            val bytes = field.toByteArray(Charsets.UTF_8)
+            val lenBuf = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(bytes.size)
+            transcript.write(lenBuf.array())
+            transcript.write(bytes)
+        }
+        return transcript.toByteArray()
+    }
+
+    fun computeSasCodeFull(
+        sharedSecret: ByteArray,
+        protocolVersion: String,
+        transferId: String,
+        senderId: String,
+        receiverId: String,
+        senderIdentityPubHex: String,
+        receiverIdentityPubHex: String,
+        senderEphPubHex: String,
+        receiverEphPubHex: String,
+        securityParams: String
+    ): String {
+        val normalizedSecret = if (sharedSecret.size == 32) {
+            sharedSecret
+        } else if (sharedSecret.size > 32) {
+            sharedSecret.copyOfRange(sharedSecret.size - 32, sharedSecret.size)
+        } else {
+            val padded = ByteArray(32)
+            System.arraycopy(sharedSecret, 0, padded, 32 - sharedSecret.size, sharedSecret.size)
+            padded
+        }
+
+        val transcript = computeCanonicalSasTranscript(
+            protocolVersion,
+            transferId,
+            senderId,
+            receiverId,
+            senderIdentityPubHex,
+            receiverIdentityPubHex,
+            senderEphPubHex,
+            receiverEphPubHex,
+            securityParams
+        )
+        val transcriptHash = MessageDigest.getInstance("SHA-256").digest(transcript)
+
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(transcriptHash, "HmacSHA256"))
+        val prk = mac.doFinal(normalizedSecret)
+
+        val prkKey = SecretKeySpec(prk, "HmacSHA256")
+        mac.init(prkKey)
+        mac.update("auradrop/sas/v2:numeric-sas".toByteArray(Charsets.UTF_8))
+        mac.update(0x01.toByte())
+        val okm = mac.doFinal()
+
+        val bb = ByteBuffer.wrap(okm).order(ByteOrder.BIG_ENDIAN)
+        val numRaw = bb.getInt().toLong() and 0xFFFFFFFFL
+        val num = (numRaw % 1_000_000L).toInt()
+        return String.format("%03d %03d", num / 1000, num % 1000)
+    }
+
     fun computeSasCode(
         sharedSecret: ByteArray,
         transferId: String,
@@ -186,21 +278,48 @@ object AuraAeadCrypto {
         senderEphPubHex: String,
         receiverEphPubHex: String
     ): String {
-        val mac = Mac.getInstance("HmacSHA256")
-        mac.init(SecretKeySpec(transferId.toByteArray(Charsets.UTF_8), "HmacSHA256"))
-        val prk = mac.doFinal(sharedSecret)
+        return computeSasCodeFull(
+            sharedSecret,
+            SAS_PROTOCOL_VERSION,
+            transferId,
+            senderId,
+            receiverId,
+            senderIdentityPubHex,
+            receiverIdentityPubHex,
+            senderEphPubHex,
+            receiverEphPubHex,
+            SAS_SECURITY_PARAMS
+        )
+    }
 
-        val prkKey = SecretKeySpec(prk, "HmacSHA256")
-        mac.init(prkKey)
-        val infoStr = "auradrop/sas/v1:$senderId:$receiverId:$senderIdentityPubHex:$receiverIdentityPubHex:$senderEphPubHex:$receiverEphPubHex"
-        mac.update(infoStr.toByteArray(Charsets.UTF_8))
-        mac.update(0x01.toByte())
-        val okm = mac.doFinal()
+    fun verifyDeterministicTestVector(): Boolean {
+        val sharedSecret = ByteArray(32) { 0x42.toByte() }
+        val protocolVersion = "auradrop/tcp/2"
+        val transferId = "test-transfer-id-12345"
+        val senderId = "alice-device-id"
+        val receiverId = "bob-device-id"
+        val senderIdentity = "0411111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"
+        val receiverIdentity = "0422222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222222"
+        val senderEph = "0433333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333"
+        val receiverEph = "0444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444"
+        val securityParams = "cipher=aead-aes256-gcm:kdf=hkdf-sha256:framing=v2"
 
-        val bb = ByteBuffer.wrap(okm)
-        val numRaw = bb.getInt().toLong() and 0xFFFFFFFFL
-        val num = (numRaw % 1_000_000L).toInt()
-        return String.format("%03d %03d", num / 1000, num % 1000)
+        val sas = computeSasCodeFull(
+            sharedSecret,
+            protocolVersion,
+            transferId,
+            senderId,
+            receiverId,
+            senderIdentity,
+            receiverIdentity,
+            senderEph,
+            receiverEph,
+            securityParams
+        )
+        val expected = "365 027"
+        val matches = sas == expected
+        Log.i("AuraAeadCrypto", "[TEST VECTOR] Derived SAS: $sas (Expected: $expected, Matches: $matches)")
+        return matches
     }
 }
 
@@ -241,45 +360,92 @@ object AuraIdentityManager {
                 return
             }
         } catch (e: Exception) {
-            Log.w("AuraIdentity", "Android KeyStore unavailable or failed: ${e.message}, falling back to protected prefs")
+            Log.w("AuraIdentity", "Android KeyStore EC unavailable: ${e.message}, attempting secure MasterKey fallback")
         }
 
-        // 2. Protected preferences fallback
-        val prefs = context.getSharedPreferences("auradrop_crypto_identity", Context.MODE_PRIVATE)
-        val privHex = prefs.getString("identity_private_key_pkcs8", null)
-        val pubHex = prefs.getString("identity_public_key_sec1", null)
+        // 2. Hardware/OS-backed encrypted fallback using AndroidKeyStore AES master key
+        // Guarantees that NO fallback ever stores an unprotected identity secret on disk!
+        try {
+            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val masterAlias = "auradrop_identity_master_key"
+            if (!keyStore.containsAlias(masterAlias)) {
+                val kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+                val spec = KeyGenParameterSpec.Builder(
+                    masterAlias,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+                kg.init(spec)
+                kg.generateKey()
+            }
+            val masterKey = keyStore.getKey(masterAlias, null) as SecretKey
+            val prefs = context.getSharedPreferences("auradrop_crypto_identity", Context.MODE_PRIVATE)
 
-        if (!privHex.isNullOrEmpty() && !pubHex.isNullOrEmpty()) {
-            try {
+            val legacyPlainHex = prefs.getString("identity_private_key_pkcs8", null)
+            val encPrivHex = prefs.getString("identity_private_key_encrypted_hex", null)
+            val ivHex = prefs.getString("identity_private_key_iv_hex", null)
+            val pubHex = prefs.getString("identity_public_key_sec1", null)
+
+            if (!encPrivHex.isNullOrEmpty() && !ivHex.isNullOrEmpty() && !pubHex.isNullOrEmpty()) {
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.DECRYPT_MODE, masterKey, GCMParameterSpec(128, ivHex.decodeHex()))
+                val privBytes = cipher.doFinal(encPrivHex.decodeHex())
                 val kf = KeyFactory.getInstance("EC")
-                val privSpec = java.security.spec.PKCS8EncodedKeySpec(privHex.decodeHex())
-                val privKey = kf.generatePrivate(privSpec)
+                val privKey = kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privBytes))
+                val pubKey = AuraAeadCrypto.importSec1PublicKey(pubHex.decodeHex())
+                keyPair = KeyPair(pubKey, privKey)
+                publicSec1Hex = pubHex
+                if (legacyPlainHex != null) {
+                    prefs.edit().remove("identity_private_key_pkcs8").apply()
+                }
+                return
+            } else if (!legacyPlainHex.isNullOrEmpty() && !pubHex.isNullOrEmpty()) {
+                // Migrate legacy plaintext to OS-encrypted storage and delete plaintext
+                val privBytes = legacyPlainHex.decodeHex()
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.ENCRYPT_MODE, masterKey)
+                val iv = cipher.iv
+                val encryptedBytes = cipher.doFinal(privBytes)
+                prefs.edit()
+                    .putString("identity_private_key_encrypted_hex", encryptedBytes.toHex())
+                    .putString("identity_private_key_iv_hex", iv.toHex())
+                    .remove("identity_private_key_pkcs8") // Scrub plaintext!
+                    .apply()
+                val kf = KeyFactory.getInstance("EC")
+                val privKey = kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(privBytes))
                 val pubKey = AuraAeadCrypto.importSec1PublicKey(pubHex.decodeHex())
                 keyPair = KeyPair(pubKey, privKey)
                 publicSec1Hex = pubHex
                 return
-            } catch (e: Exception) {
-                Log.w("AuraIdentity", "Failed to load saved identity, generating fresh: ${e.message}")
+            } else {
+                // Generate fresh key and store ONLY encrypted with Android KeyStore master key
+                val kpg = KeyPairGenerator.getInstance("EC")
+                kpg.initialize(ECGenParameterSpec("secp256r1"))
+                val kp = kpg.generateKeyPair()
+                val sec1Hex = AuraAeadCrypto.exportSec1PublicKey(kp.public as ECPublicKey).toHex()
+                val privBytes = kp.private.encoded
+
+                val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+                cipher.init(Cipher.ENCRYPT_MODE, masterKey)
+                val iv = cipher.iv
+                val encryptedBytes = cipher.doFinal(privBytes)
+
+                prefs.edit()
+                    .putString("identity_private_key_encrypted_hex", encryptedBytes.toHex())
+                    .putString("identity_private_key_iv_hex", iv.toHex())
+                    .putString("identity_public_key_sec1", sec1Hex)
+                    .remove("identity_private_key_pkcs8") // Scrub plaintext!
+                    .apply()
+
+                keyPair = kp
+                publicSec1Hex = sec1Hex
+                return
             }
-        }
-
-        try {
-            val kpg = KeyPairGenerator.getInstance("EC")
-            kpg.initialize(ECGenParameterSpec("secp256r1"))
-            val kp = kpg.generateKeyPair()
-            val sec1 = AuraAeadCrypto.exportSec1PublicKey(kp.public as ECPublicKey)
-            val sec1Hex = sec1.toHex()
-            val privBytesHex = kp.private.encoded.toHex()
-
-            prefs.edit()
-                .putString("identity_private_key_pkcs8", privBytesHex)
-                .putString("identity_public_key_sec1", sec1Hex)
-                .apply()
-
-            keyPair = kp
-            publicSec1Hex = sec1Hex
         } catch (e: Exception) {
-            Log.e("AuraIdentity", "ECDSA keygen failed: ${e.message}")
+            Log.e("AuraIdentity", "Android KeyStore encrypted identity setup failed: ${e.message}")
         }
     }
 
@@ -552,6 +718,7 @@ class MainActivity : FlutterActivity() {
 
         createSystemNotificationChannels()
         AuraIdentityManager.initialize(applicationContext)
+        AuraAeadCrypto.verifyDeterministicTestVector()
         dbHelper = AuraDropDatabaseHelper(this)
 
         val prefs = getSharedPreferences("auradrop_identity", Context.MODE_PRIVATE)
@@ -3603,13 +3770,22 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun generateSasCode(idA: String, idB: String): String {
-        val combined = "$idA:$idB"
-        val hash = MessageDigest.getInstance("SHA-256").digest(combined.toByteArray()).toHex()
-        val p1 = hash.substring(0, 4).toInt(16) % 10000
-        val p2 = hash.substring(4, 8).toInt(16) % 10000
-        val p3 = hash.substring(8, 12).toInt(16) % 10000
-        val p4 = hash.substring(12, 16).toInt(16) % 10000
-        return String.format("%04d %04d %04d %04d", p1, p2, p3, p4)
+        val transcript = AuraAeadCrypto.computeCanonicalSasTranscript(
+            protocolVersion = AuraAeadCrypto.SAS_PROTOCOL_VERSION,
+            transferId = "legacy_transfer",
+            senderId = idA,
+            receiverId = idB,
+            senderIdentityPubHex = AuraIdentityManager.getPublicKeyHex(),
+            receiverIdentityPubHex = "",
+            senderEphPubHex = "",
+            receiverEphPubHex = "",
+            securityParams = AuraAeadCrypto.SAS_SECURITY_PARAMS
+        )
+        val hash = MessageDigest.getInstance("SHA-256").digest(transcript)
+        val bb = ByteBuffer.wrap(hash).order(ByteOrder.BIG_ENDIAN)
+        val numRaw = bb.getInt().toLong() and 0xFFFFFFFFL
+        val num = (numRaw % 1_000_000L).toInt()
+        return String.format("%03d %03d", num / 1000, num % 1000)
     }
 
     private fun openFileWithSystemViewer(filePath: String): Boolean {
