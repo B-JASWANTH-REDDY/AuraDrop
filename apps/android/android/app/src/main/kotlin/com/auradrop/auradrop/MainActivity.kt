@@ -35,10 +35,58 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
 import java.net.*
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import javax.crypto.Cipher
+import javax.crypto.Mac
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
+
+object AuraAeadCrypto {
+    fun deriveSessionKey(token: String, transferId: String, senderId: String, receiverId: String): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        val saltKey = SecretKeySpec(transferId.toByteArray(Charsets.UTF_8), "HmacSHA256")
+        mac.init(saltKey)
+        val prk = mac.doFinal(token.toByteArray(Charsets.UTF_8))
+
+        val prkKey = SecretKeySpec(prk, "HmacSHA256")
+        mac.init(prkKey)
+        val infoStr = "auradrop/tcp/aead/v1:$senderId:$receiverId"
+        mac.update(infoStr.toByteArray(Charsets.UTF_8))
+        mac.update(0x01.toByte())
+        val okm = mac.doFinal()
+        return okm.copyOf(32)
+    }
+
+    fun createChunkNonce(saltPrefix: Int, chunkIndex: Long): ByteArray {
+        val nonce = ByteArray(12)
+        val bb = ByteBuffer.wrap(nonce)
+        bb.putInt(saltPrefix)
+        bb.putLong(chunkIndex)
+        return nonce
+    }
+
+    fun encryptChunk(keyBytes: ByteArray, nonce: ByteArray, aad: ByteArray, plaintext: ByteArray, offset: Int, length: Int): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val spec = GCMParameterSpec(128, nonce)
+        val key = SecretKeySpec(keyBytes, "AES")
+        cipher.init(Cipher.ENCRYPT_MODE, key, spec)
+        cipher.updateAAD(aad)
+        return cipher.doFinal(plaintext, offset, length)
+    }
+
+    fun decryptChunk(keyBytes: ByteArray, nonce: ByteArray, aad: ByteArray, ciphertextAndTag: ByteArray): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val spec = GCMParameterSpec(128, nonce)
+        val key = SecretKeySpec(keyBytes, "AES")
+        cipher.init(Cipher.DECRYPT_MODE, key, spec)
+        cipher.updateAAD(aad)
+        return cipher.doFinal(ciphertextAndTag)
+    }
+}
 
 data class PeerInfo(
     val deviceId: String,
@@ -1643,6 +1691,9 @@ class MainActivity : FlutterActivity() {
                             put("oneTimeToken", token)
                             put("expiresAt", expiresAt)
                             put("protocol", "auradrop/tcp/1")
+                            put("encryption", "aead-aes256-gcm")
+                            put("receiverId", deviceId)
+                            put("receiverUserId", deviceId)
                         })
                     } else {
                         cancelSystemIncomingShareNotification(xferId)
@@ -1656,8 +1707,11 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "/api/auradrop/v1/upload" -> {
-                    val xferId = queryParams["transferId"] ?: headers["x-transfer-id"] ?: ""
-                    val presentedToken = headers["x-token"] ?: headers["x-one-time-token"] ?: queryParams["token"] ?: ""
+                    val xferId = headers["x-transfer-id"] ?: queryParams["transferId"] ?: ""
+                    val presentedToken = (headers["authorization"]?.removePrefix("Bearer ")?.removePrefix("bearer ")?.trim())
+                        ?: headers["x-token"]
+                        ?: headers["x-one-time-token"]
+                        ?: ""
                     val sessionMeta = httpUploadSessions[xferId]
 
                     if (sessionMeta == null) {
@@ -1688,6 +1742,19 @@ class MainActivity : FlutterActivity() {
                         })
                         return@withContext
                     }
+
+                    // Peer identity binding verification
+                    val presentedSenderId = headers["x-sender-id"] ?: ""
+                    if (sessionMeta.senderUserId.isNotEmpty() && presentedSenderId.isNotEmpty() && presentedSenderId != sessionMeta.senderUserId) {
+                        sendJsonResponse(403, "Forbidden", JSONObject().apply {
+                            put("error", "Sender identity mismatch: transfer token bound to different device")
+                        })
+                        return@withContext
+                    }
+
+                    // Sanitized logging: mask secret token
+                    val maskedToken = if (presentedToken.length >= 6) "${presentedToken.substring(0, 6)}...***" else "***"
+                    Log.i(TAG, "[AuraTransfer] Inbound TCP upload authenticated: ${sessionMeta.fileName} (${sessionMeta.fileSize} bytes) [Token: $maskedToken]")
 
                     val fileName = sessionMeta.fileName
                     val fileSize = sessionMeta.fileSize
@@ -1720,6 +1787,11 @@ class MainActivity : FlutterActivity() {
                     val tempPartFile = File(downloadsDir, ".${fileName}.${xferId}.part")
                     val digest = MessageDigest.getInstance("SHA-256")
 
+                    val isAead = headers["x-encryption"] == "aead-aes256-gcm"
+                    val sessionKey = if (isAead) {
+                        AuraAeadCrypto.deriveSessionKey(sessionMeta.token, sessionMeta.transferId, sessionMeta.senderUserId, deviceId)
+                    } else null
+
                     var totalWritten = 0L
                     val buf = ByteArray(512 * 1024)
                     val startTime = System.currentTimeMillis()
@@ -1740,47 +1812,103 @@ class MainActivity : FlutterActivity() {
                     val fos = FileOutputStream(tempPartFile)
                     try {
                         val bos = BufferedOutputStream(fos, 512 * 1024)
-                        while (totalWritten < fileSize) {
-                            if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
-                                Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
-                                break
+                        if (isAead && sessionKey != null) {
+                            val dis = DataInputStream(input)
+                            var chunkIndex = 0L
+                            while (totalWritten < fileSize) {
+                                if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
+                                    Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
+                                    break
+                                }
+                                val payloadLen = dis.readInt()
+                                if (payloadLen <= 0 || payloadLen > 10 * 1024 * 1024) break
+                                val nonce = ByteArray(12)
+                                dis.readFully(nonce)
+                                val ciphertextAndTag = ByteArray(payloadLen)
+                                dis.readFully(ciphertextAndTag)
+
+                                val aad = "$xferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                                val plaintext = AuraAeadCrypto.decryptChunk(sessionKey, nonce, aad, ciphertextAndTag)
+
+                                bos.write(plaintext)
+                                digest.update(plaintext)
+                                totalWritten += plaintext.size
+                                chunkIndex++
+
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
+                                    lastProgressTime = now
+                                    val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                                    val speed = (totalWritten / elapsedSec).toLong()
+                                    val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                    val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
+
+                                    sendEvent("transferProgress", mapOf(
+                                        "transferId" to xferId,
+                                        "state" to "TRANSFERRING",
+                                        "fileName" to fileName,
+                                        "totalBytes" to fileSize,
+                                        "transferredBytes" to totalWritten,
+                                        "speedBytesPerSec" to speed,
+                                        "etaSeconds" to eta,
+                                        "percentage" to pct
+                                    ))
+
+                                    updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
+                                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                        transferId = xferId,
+                                        fileName = fileName,
+                                        progressPercent = pct,
+                                        transferredBytes = totalWritten,
+                                        totalBytes = fileSize,
+                                        speedBytesPerSec = speed,
+                                        isSending = false
+                                    )
+                                }
                             }
-                            val toRead = Math.min(buf.size.toLong(), fileSize - totalWritten).toInt()
-                            val r = input.read(buf, 0, toRead)
-                            if (r == -1) break
-                            bos.write(buf, 0, r)
-                            digest.update(buf, 0, r)
-                            totalWritten += r
+                        } else {
+                            while (totalWritten < fileSize) {
+                                if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
+                                    Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
+                                    break
+                                }
+                                val toRead = Math.min(buf.size.toLong(), fileSize - totalWritten).toInt()
+                                val r = input.read(buf, 0, toRead)
+                                if (r == -1) break
+                                bos.write(buf, 0, r)
+                                digest.update(buf, 0, r)
+                                totalWritten += r
 
-                            val now = System.currentTimeMillis()
-                            if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
-                                lastProgressTime = now
-                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                                val speed = (totalWritten / elapsedSec).toLong()
-                                val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
-                                val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
+                                val now = System.currentTimeMillis()
+                                if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
+                                    lastProgressTime = now
+                                    val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
+                                    val speed = (totalWritten / elapsedSec).toLong()
+                                    val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
+                                    val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
 
-                                sendEvent("transferProgress", mapOf(
-                                    "transferId" to xferId,
-                                    "state" to "TRANSFERRING",
-                                    "fileName" to fileName,
-                                    "totalBytes" to fileSize,
-                                    "transferredBytes" to totalWritten,
-                                    "speedBytesPerSec" to speed,
-                                    "etaSeconds" to eta,
-                                    "percentage" to pct
-                                ))
+                                    sendEvent("transferProgress", mapOf(
+                                        "transferId" to xferId,
+                                        "state" to "TRANSFERRING",
+                                        "fileName" to fileName,
+                                        "totalBytes" to fileSize,
+                                        "transferredBytes" to totalWritten,
+                                        "speedBytesPerSec" to speed,
+                                        "etaSeconds" to eta,
+                                        "percentage" to pct
+                                    ))
 
-                                updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
-                                AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                                    transferId = xferId,
-                                    fileName = fileName,
-                                    progressPercent = pct,
-                                    transferredBytes = totalWritten,
-                                    totalBytes = fileSize,
-                                    speedBytesPerSec = speed,
-                                    isSending = false
-                                )
+                                    updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
+                                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                        transferId = xferId,
+                                        fileName = fileName,
+                                        progressPercent = pct,
+                                        transferredBytes = totalWritten,
+                                        totalBytes = fileSize,
+                                        speedBytesPerSec = speed,
+                                        isSending = false
+                                    )
+                                }
                             }
                         }
                         bos.flush()
@@ -2306,6 +2434,9 @@ class MainActivity : FlutterActivity() {
             prepConn.disconnect()
             val prepResp = JSONObject(prepRespStr)
             val token = prepResp.optString("oneTimeToken", "")
+            val encryptionMode = prepResp.optString("encryption", "")
+            val receiverId = prepResp.optString("receiverId", prepResp.optString("receiverUserId", ""))
+            val isAead = encryptionMode == "aead-aes256-gcm"
             val peerQuicPort = prepResp.optInt("quicPort", 0)
             val peerCertFp = prepResp.optString("certFingerprint", "")
 
@@ -2314,21 +2445,23 @@ class MainActivity : FlutterActivity() {
                 "state" to "READY_TO_TRANSFER"
             ))
 
-            val uploadUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/upload?transferId=$transferId&token=$token")
+            // Clean URL: Token and transfer ID removed from query string per security requirements
+            val uploadUrl = URL("http://$targetIp:$effectivePort/api/auradrop/v1/upload")
             val uploadConn = (uploadUrl.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 10000
                 readTimeout = 3600000
                 doOutput = true
-                if (fileSize > 0) {
-                    setFixedLengthStreamingMode(fileSize)
-                } else {
-                    setChunkedStreamingMode(512 * 1024)
-                }
+                setChunkedStreamingMode(512 * 1024)
+                setRequestProperty("Authorization", "Bearer $token")
+                setRequestProperty("x-token", token)
                 setRequestProperty("x-transfer-id", transferId)
+                setRequestProperty("x-sender-id", deviceId)
                 setRequestProperty("x-file-name", fileName)
                 setRequestProperty("x-file-size", fileSize.toString())
-                setRequestProperty("x-token", token)
+                if (isAead) {
+                    setRequestProperty("x-encryption", "aead-aes256-gcm")
+                }
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
@@ -2343,10 +2476,16 @@ class MainActivity : FlutterActivity() {
             val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
                 ?: throw FileNotFoundException("Could not open URI: $uriStr")
 
+            val sessionKey = if (isAead) {
+                AuraAeadCrypto.deriveSessionKey(token, transferId, deviceId, receiverId)
+            } else null
+
             try {
                 inputStream.use { fis ->
                     uploadConn.outputStream.use { uos ->
                         val bos = BufferedOutputStream(uos, 512 * 1024)
+                        val dos = DataOutputStream(bos)
+                        var chunkIndex = 0L
                         while (sentBytes < fileSize) {
                             if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
                                 uploadConn.disconnect()
@@ -2355,7 +2494,19 @@ class MainActivity : FlutterActivity() {
                             val toRead = Math.min(buf.size.toLong(), fileSize - sentBytes).toInt()
                             val r = fis.read(buf, 0, toRead)
                             if (r == -1) break
-                            bos.write(buf, 0, r)
+
+                            if (isAead && sessionKey != null) {
+                                val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
+                                val aad = "$transferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                                val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
+                                chunkIndex++
+
+                                dos.writeInt(ciphertextAndTag.size)
+                                dos.write(nonce)
+                                dos.write(ciphertextAndTag)
+                            } else {
+                                bos.write(buf, 0, r)
+                            }
                             sentBytes += r
 
                             val now = System.currentTimeMillis()
@@ -2380,6 +2531,7 @@ class MainActivity : FlutterActivity() {
                                 updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, sentBytes, fileSize, speed, true)
                             }
                         }
+                        dos.flush()
                         bos.flush()
                     }
                 }

@@ -256,6 +256,7 @@ name = "auradrop"
 version = "2.0.1"
 dependencies = [
  "axum",
+ "bytes",
  "chrono",
  "dirs 6.0.0",
  "futures-util",
@@ -263,6 +264,7 @@ dependencies = [
  "local-ip-address",
  "reqwest 0.12.28",
  "rfd",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

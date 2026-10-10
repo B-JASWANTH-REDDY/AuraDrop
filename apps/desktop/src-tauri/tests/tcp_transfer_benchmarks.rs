@@ -1,16 +1,17 @@
 //! Developer-Only Comprehensive Benchmark & Verification Suite
 //! for AuraDrop High-Performance TCP Streaming Bulk Transfer Engine
+//! with In-Transit AEAD AES-256-GCM Authenticated Encryption & Identity Binding
 //!
-//! Tests:
-//! 1. Buffer Size Tuning (256 KiB, 512 KiB, 1 MiB, 2 MiB)
-//! 2. TCP_NODELAY vs Standard OS Socket Schedulers
-//! 3. Large File Bulk Transfers (100 MB, 500 MB)
-//! 4. End-to-End Integrity Verification (In-flight SHA-256)
-//! 5. Single-Use Token Security & Replay Attack Prevention
-//! 6. Expired Token Rejection
-//! 7. SHA-256 Mismatch Rejection & Temporary File Cleanup
-//! 8. Filename Sanitization & Directory Traversal Prevention
-//! 9. Collision Avoidance & Non-colliding Dedup Renaming
+//! Verified Requirements:
+//! 1. In-transit authenticated encryption (AES-256-GCM AEAD frames)
+//! 2. Token extraction exclusively from HTTP headers (`Authorization: Bearer <token>` or `x-token`)
+//! 3. URL query parameter token rejection (sanitized, zero query token leakage)
+//! 4. Single-use token consumption and replay rejection
+//! 5. 60-second TTL expiry rejection
+//! 6. Peer identity binding verification (`x-sender-id` bound to handshake metadata)
+//! 7. AEAD Bit-flip and tampering detection (immediate session abort and .part purge)
+//! 8. Bounded 512 KiB streaming buffers and high-throughput goodput benchmarking
+//! 9. End-to-end SHA-256 checksum verification and collision avoidance
 
 use axum::{
     body::Body,
@@ -23,6 +24,8 @@ use axum::{
 use chrono::Utc;
 use futures_util::StreamExt;
 use reqwest::Client;
+use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
+use ring::hkdf;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -36,7 +39,69 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-// Re-implement or mirror transfer primitives for headless test execution
+pub const BENCH_SERVER_ID: &str = "auradrop_receiver_node_01";
+
+pub fn derive_session_key(
+    token: &str,
+    transfer_id: &str,
+    sender_id: &str,
+    receiver_id: &str,
+) -> [u8; 32] {
+    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, transfer_id.as_bytes());
+    let prk = salt.extract(token.as_bytes());
+    let info_str = format!("auradrop/tcp/aead/v1:{}:{}", sender_id, receiver_id);
+    let info = [info_str.as_bytes()];
+    let okm = prk.expand(&info, &AES_256_GCM).expect("HKDF expand failed");
+    let mut key_bytes = [0u8; 32];
+    okm.fill(&mut key_bytes).expect("HKDF fill failed");
+    key_bytes
+}
+
+pub fn create_chunk_nonce(salt_prefix: u32, chunk_index: u64) -> [u8; 12] {
+    let mut nonce = [0u8; 12];
+    nonce[0..4].copy_from_slice(&salt_prefix.to_be_bytes());
+    nonce[4..12].copy_from_slice(&chunk_index.to_be_bytes());
+    nonce
+}
+
+pub fn encrypt_chunk(
+    key: &[u8; 32],
+    nonce_bytes: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, String> {
+    let unbound_key = UnboundKey::new(&AES_256_GCM, key)
+        .map_err(|e| format!("Invalid AES-256-GCM key: {:?}", e))?;
+    let less_safe_key = LessSafeKey::new(unbound_key);
+    let nonce = Nonce::assume_unique_for_key(*nonce_bytes);
+
+    let mut in_out = plaintext.to_vec();
+    less_safe_key
+        .seal_in_place_append_tag(nonce, Aad::from(aad), &mut in_out)
+        .map_err(|e| format!("AEAD encryption failed: {:?}", e))?;
+
+    Ok(in_out)
+}
+
+pub fn decrypt_chunk(
+    key: &[u8; 32],
+    nonce_bytes: &[u8; 12],
+    aad: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, String> {
+    let unbound_key = UnboundKey::new(&AES_256_GCM, key)
+        .map_err(|e| format!("Invalid AES-256-GCM key: {:?}", e))?;
+    let less_safe_key = LessSafeKey::new(unbound_key);
+    let nonce = Nonce::assume_unique_for_key(*nonce_bytes);
+
+    let mut in_out = ciphertext.to_vec();
+    let decrypted = less_safe_key
+        .open_in_place(nonce, Aad::from(aad), &mut in_out)
+        .map_err(|e| format!("AEAD tag verification failed: {:?}", e))?;
+
+    Ok(decrypted.to_vec())
+}
+
 pub fn sanitize_filename(name: &str) -> String {
     let clean = name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|', '\0'], "_");
     let parts: Vec<&str> = clean.split('.').filter(|s| *s != ".." && *s != ".").collect();
@@ -88,6 +153,7 @@ pub struct BenchSession {
     pub file_size: u64,
     pub sha256_expected: String,
     pub expires_at: i64,
+    pub sender_id: String,
     pub is_consumed: Arc<AtomicBool>,
 }
 
@@ -106,6 +172,11 @@ async fn bench_handle_prepare_upload(
     let file_name = payload["fileName"].as_str().unwrap_or("").to_string();
     let file_size = payload["fileSize"].as_u64().unwrap_or(0);
     let sha256 = payload["sha256"].as_str().unwrap_or("").to_string();
+    let sender_id = payload["senderUserId"]
+        .as_str()
+        .or_else(|| payload["senderId"].as_str())
+        .unwrap_or("anonymous_sender")
+        .to_string();
 
     if file_name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Empty filename"}))));
@@ -121,6 +192,7 @@ async fn bench_handle_prepare_upload(
         file_size,
         sha256_expected: sha256,
         expires_at,
+        sender_id,
         is_consumed: Arc::new(AtomicBool::new(false)),
     };
 
@@ -131,13 +203,15 @@ async fn bench_handle_prepare_upload(
         "transferId": transfer_id,
         "oneTimeToken": token,
         "expiresAt": expires_at,
-        "protocol": "auradrop/tcp/1"
+        "protocol": "auradrop/tcp/1",
+        "encryption": "aead-aes256-gcm",
+        "receiverId": BENCH_SERVER_ID
     })))
 }
 
 async fn bench_handle_upload(
     State(state): State<BenchServerState>,
-    Query(params): Query<HashMap<String, String>>,
+    Query(_params): Query<HashMap<String, String>>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
@@ -145,18 +219,28 @@ async fn bench_handle_upload(
         .get("x-transfer-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string())
-        .or_else(|| params.get("transferId").cloned())
         .unwrap_or_default();
 
+    // Enforce Header-only token extraction: URL query tokens strictly rejected
     let presented_token = headers
-        .get("x-token")
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| params.get("token").cloned())
+        .and_then(|s| s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")))
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-token")
+                .or_else(|| headers.get("x-one-time-token"))
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.trim().to_string())
+        })
         .unwrap_or_default();
 
     if transfer_id.is_empty() || presented_token.is_empty() {
-        return Err((StatusCode::UNAUTHORIZED, Json(json!({"error": "Missing transferId or token"}))));
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error": "Missing transferId or authorization token in headers"})),
+        ));
     }
 
     let now_millis = Utc::now().timestamp_millis();
@@ -181,6 +265,35 @@ async fn bench_handle_upload(
         }
     };
 
+    // Verify peer identity binding
+    let presented_sender = headers
+        .get("x-sender-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if !session.sender_id.is_empty() && !presented_sender.is_empty() && presented_sender != session.sender_id {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Sender identity mismatch: token bound to different device"})),
+        ));
+    }
+
+    let encryption_mode = headers
+        .get("x-encryption")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("none");
+    let is_aead = encryption_mode == "aead-aes256-gcm";
+
+    let session_key = if is_aead {
+        Some(derive_session_key(
+            &session.token,
+            &session.transfer_id,
+            &session.sender_id,
+            BENCH_SERVER_ID,
+        ))
+    } else {
+        None
+    };
+
     let final_dest = resolve_unique_destination(&state.downloads_dir, &session.file_name);
     let safe_name = sanitize_filename(&session.file_name);
     let temp_file_path = state.downloads_dir.join(format!(".{}.{}.part", safe_name, session.transfer_id));
@@ -195,6 +308,8 @@ async fn bench_handle_upload(
     let mut transferred = 0u64;
 
     let mut stream = body.into_data_stream();
+    let mut stream_buf = Vec::with_capacity(1024 * 1024);
+    let mut chunk_index = 0u64;
 
     while let Some(chunk_res) = stream.next().await {
         let chunk = match chunk_res {
@@ -205,17 +320,72 @@ async fn bench_handle_upload(
             }
         };
 
-        if let Err(e) = writer.write_all(&chunk).await {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
-        }
+        if is_aead {
+            stream_buf.extend_from_slice(&chunk);
 
-        hasher.update(&chunk);
-        transferred += chunk.len() as u64;
+            while stream_buf.len() >= 16 {
+                let payload_len = u32::from_be_bytes([
+                    stream_buf[0],
+                    stream_buf[1],
+                    stream_buf[2],
+                    stream_buf[3],
+                ]) as usize;
+                let total_frame_len = 4 + 12 + payload_len;
+                if stream_buf.len() < total_frame_len {
+                    break;
+                }
 
-        if transferred > session.file_size {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Oversized payload rejected"}))));
+                let mut nonce = [0u8; 12];
+                nonce.copy_from_slice(&stream_buf[4..16]);
+                let ciphertext = &stream_buf[16..total_frame_len];
+                let aad = format!("{}:{}", session.transfer_id, chunk_index);
+
+                let decrypted = match decrypt_chunk(
+                    session_key.as_ref().unwrap(),
+                    &nonce,
+                    aad.as_bytes(),
+                    ciphertext,
+                ) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        state.sessions.write().await.remove(&transfer_id);
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({"error": format!("AEAD tag verification failed: {}", e)})),
+                        ));
+                    }
+                };
+
+                chunk_index += 1;
+                stream_buf.drain(..total_frame_len);
+
+                if let Err(e) = writer.write_all(&decrypted).await {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
+                }
+
+                hasher.update(&decrypted);
+                transferred += decrypted.len() as u64;
+
+                if transferred > session.file_size {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Oversized payload rejected"}))));
+                }
+            }
+        } else {
+            if let Err(e) = writer.write_all(&chunk).await {
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
+            }
+
+            hasher.update(&chunk);
+            transferred += chunk.len() as u64;
+
+            if transferred > session.file_size {
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Oversized payload rejected"}))));
+            }
         }
     }
 
@@ -278,10 +448,12 @@ async fn start_test_server(downloads_dir: PathBuf, buffer_size: usize) -> (Strin
 }
 
 #[tokio::test]
-async fn test_tcp_security_rejections() {
+async fn test_tcp_security_and_aead_verification() {
     let temp_dir = tempdir().unwrap();
     let (base_url, _) = start_test_server(temp_dir.path().to_path_buf(), 512 * 1024).await;
     let client = Client::builder().tcp_nodelay(true).build().unwrap();
+
+    let client_id = "client_node_alice";
 
     // 1. Prepare valid upload
     let prep_res = client
@@ -290,118 +462,225 @@ async fn test_tcp_security_rejections() {
             "transferId": "sec_test_01",
             "fileName": "test.txt",
             "fileSize": 100,
-            "sha256": "abcdef"
+            "sha256": "abcdef",
+            "senderUserId": client_id
         }))
         .send()
         .await
         .unwrap();
 
     let prep_json: serde_json::Value = prep_res.json().await.unwrap();
-    let _token = prep_json["oneTimeToken"].as_str().unwrap().to_string();
+    let valid_token = prep_json["oneTimeToken"].as_str().unwrap().to_string();
 
-    // Test A: Invalid token rejection (403)
+    // Test 1: URL Query parameter token ONLY (missing Authorization header) must be REJECTED (401 Unauthorized)
+    let url_only_res = client
+        .post(format!("{}/api/auradrop/v1/upload?transferId=sec_test_01&token={}", base_url, valid_token))
+        .body(vec![0u8; 100])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        url_only_res.status(),
+        StatusCode::UNAUTHORIZED,
+        "Query parameter token without Authorization header must be rejected"
+    );
+
+    // Test 2: Invalid bearer token in header must be REJECTED (403 Forbidden)
     let bad_tok_res = client
-        .post(format!("{}/api/auradrop/v1/upload?transferId=sec_test_01&token=bad_token_xxx", base_url))
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("x-transfer-id", "sec_test_01")
+        .header("authorization", "Bearer bad_forged_token_xxx")
         .body(vec![0u8; 100])
         .send()
         .await
         .unwrap();
     assert_eq!(bad_tok_res.status(), StatusCode::FORBIDDEN);
 
-    // Test B: Valid upload succeeds
-    let good_payload = vec![42u8; 100];
+    // Test 3: Peer identity mismatch (x-sender-id does not match prepared senderUserId) must be REJECTED (403 Forbidden)
+    let mismatch_sender_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("x-transfer-id", "sec_test_01")
+        .header("authorization", format!("Bearer {}", valid_token))
+        .header("x-sender-id", "attacker_node_mallory")
+        .body(vec![0u8; 100])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        mismatch_sender_res.status(),
+        StatusCode::FORBIDDEN,
+        "Peer binding mismatch must be rejected with 403"
+    );
+
+    // Test 4: Valid AEAD AES-256-GCM encrypted transfer succeeds
+    let plain_payload = vec![42u8; 100];
     let mut h = Sha256::new();
-    h.update(&good_payload);
-    let hash = hex::encode(h.finalize());
+    h.update(&plain_payload);
+    let expected_hash = hex::encode(h.finalize());
 
     let prep_res2 = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
         .json(&json!({
             "transferId": "sec_test_02",
-            "fileName": "good.bin",
+            "fileName": "aead_encrypted.bin",
             "fileSize": 100,
-            "sha256": hash
+            "sha256": expected_hash,
+            "senderUserId": client_id
         }))
         .send()
         .await
         .unwrap();
-    let token2 = prep_res2.json::<serde_json::Value>().await.unwrap()["oneTimeToken"].as_str().unwrap().to_string();
+    let prep_json2: serde_json::Value = prep_res2.json().await.unwrap();
+    let token2 = prep_json2["oneTimeToken"].as_str().unwrap().to_string();
+
+    let session_key = derive_session_key(&token2, "sec_test_02", client_id, BENCH_SERVER_ID);
+    let nonce = create_chunk_nonce(1337, 0);
+    let aad = "sec_test_02:0";
+    let ciphertext = encrypt_chunk(&session_key, &nonce, aad.as_bytes(), &plain_payload).unwrap();
+
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&nonce);
+    frame.extend_from_slice(&ciphertext);
 
     let upload_res = client
-        .post(format!("{}/api/auradrop/v1/upload?transferId=sec_test_02&token={}", base_url, token2))
-        .body(good_payload.clone())
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token2))
+        .header("x-token", &token2)
+        .header("x-transfer-id", "sec_test_02")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .header("x-file-size", "100")
+        .body(frame.clone())
         .send()
         .await
         .unwrap();
-    assert_eq!(upload_res.status(), StatusCode::OK);
+    assert_eq!(upload_res.status(), StatusCode::OK, "AEAD transfer must succeed");
 
-    // Test C: Replay attack prevention (reusing consumed token must fail with 401 or 403)
+    // Verify committed file on disk matches decrypted plaintext
+    let saved_file = temp_dir.path().join("aead_encrypted.bin");
+    assert!(saved_file.exists());
+    let saved_bytes = tokio::fs::read(&saved_file).await.unwrap();
+    assert_eq!(saved_bytes, plain_payload);
+
+    // Test 5: Replay attack prevention (reusing consumed token must be REJECTED)
     let replay_res = client
-        .post(format!("{}/api/auradrop/v1/upload?transferId=sec_test_02&token={}", base_url, token2))
-        .body(good_payload)
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token2))
+        .header("x-transfer-id", "sec_test_02")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(frame)
         .send()
         .await
         .unwrap();
     assert!(
         replay_res.status() == StatusCode::FORBIDDEN || replay_res.status() == StatusCode::UNAUTHORIZED,
-        "Expected 403 Forbidden or 401 Unauthorized on token replay, got {}",
+        "Replay attack with consumed token must fail, got {}",
         replay_res.status()
     );
 
-    // Test D: Tampered SHA-256 checksum rejection (422) & temp file cleanup
+    // Test 6: Bit-flip / ciphertext tampering rejection (AEAD integrity verification)
     let prep_res3 = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
         .json(&json!({
             "transferId": "sec_test_03",
-            "fileName": "corrupt.bin",
+            "fileName": "tampered.bin",
             "fileSize": 100,
-            "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+            "sha256": "stream_sec_test_03",
+            "senderUserId": client_id
         }))
         .send()
         .await
         .unwrap();
     let token3 = prep_res3.json::<serde_json::Value>().await.unwrap()["oneTimeToken"].as_str().unwrap().to_string();
 
+    let session_key3 = derive_session_key(&token3, "sec_test_03", client_id, BENCH_SERVER_ID);
+    let nonce3 = create_chunk_nonce(1337, 0);
+    let aad3 = "sec_test_03:0";
+    let mut tampered_ciphertext = encrypt_chunk(&session_key3, &nonce3, aad3.as_bytes(), &plain_payload).unwrap();
+    // Invert a single bit in ciphertext payload
+    tampered_ciphertext[10] ^= 0x01;
+
+    let mut tampered_frame = Vec::new();
+    tampered_frame.extend_from_slice(&(tampered_ciphertext.len() as u32).to_be_bytes());
+    tampered_frame.extend_from_slice(&nonce3);
+    tampered_frame.extend_from_slice(&tampered_ciphertext);
+
+    let tamper_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token3))
+        .header("x-transfer-id", "sec_test_03")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(tampered_frame)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        tamper_res.status(),
+        StatusCode::BAD_REQUEST,
+        "Tampered AEAD chunk must be rejected"
+    );
+    assert!(!temp_dir.path().join("tampered.bin").exists(), "Tampered file must never be committed");
+
+    // Test 7: Plaintext SHA-256 hash mismatch rejection & temp file cleanup
+    let prep_res4 = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "sec_test_04",
+            "fileName": "corrupt_hash.bin",
+            "fileSize": 100,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+            "senderUserId": client_id
+        }))
+        .send()
+        .await
+        .unwrap();
+    let token4 = prep_res4.json::<serde_json::Value>().await.unwrap()["oneTimeToken"].as_str().unwrap().to_string();
+
     let corrupt_res = client
-        .post(format!("{}/api/auradrop/v1/upload?transferId=sec_test_03&token={}", base_url, token3))
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token4))
+        .header("x-transfer-id", "sec_test_04")
+        .header("x-sender-id", client_id)
         .body(vec![7u8; 100])
         .send()
         .await
         .unwrap();
     assert_eq!(corrupt_res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert!(!temp_dir.path().join("corrupt.bin").exists());
+    assert!(!temp_dir.path().join("corrupt_hash.bin").exists());
 }
 
 #[tokio::test]
 async fn test_tcp_streaming_buffer_benchmarks() {
     println!("\n==========================================================================================");
-    println!("        AURADROP TCP STREAMING BENCHMARK: BUFFER TUNING & THROUGHPUT EVALUATION");
+    println!("        AURADROP TCP STREAMING BENCHMARK: BUFFER TUNING & AEAD ENCRYPTION EVALUATION");
     println!("==========================================================================================");
 
     let test_file_mb = 100usize;
     let payload_size = test_file_mb * 1024 * 1024;
 
-    // Create 100 MB test source payload on disk
-    let temp_src_dir = tempdir().unwrap();
-    let src_path = temp_src_dir.path().join("bench_source_100mb.bin");
+    // Create 100 MB deterministic test payload in memory
     let mut payload = vec![0u8; payload_size];
     for (i, b) in payload.iter_mut().enumerate() {
         *b = ((i.wrapping_mul(43)) ^ (i >> 9)) as u8;
     }
-    tokio::fs::write(&src_path, &payload).await.unwrap();
 
     let mut hasher = Sha256::new();
     hasher.update(&payload);
     let expected_sha256 = hex::encode(hasher.finalize());
 
     let buffer_configs = [
-        ("256 KiB Bounded", 256 * 1024),
-        ("512 KiB Bounded", 512 * 1024),
-        ("1024 KiB Bounded", 1024 * 1024),
-        ("2048 KiB Bounded", 2048 * 1024),
+        ("256 KiB AEAD Encrypted", 256 * 1024, true),
+        ("512 KiB AEAD Encrypted", 512 * 1024, true),
+        ("1024 KiB AEAD Encrypted", 1024 * 1024, true),
+        ("512 KiB Plaintext Fallback", 512 * 1024, false),
     ];
 
-    for (label, buf_size) in buffer_configs {
+    let client_id = "bench_client_node_primary";
+
+    for (label, buf_size, enable_aead) in buffer_configs {
         let temp_dest_dir = tempdir().unwrap();
         let (base_url, _) = start_test_server(temp_dest_dir.path().to_path_buf(), buf_size).await;
 
@@ -410,7 +689,7 @@ async fn test_tcp_streaming_buffer_benchmarks() {
             .build()
             .unwrap();
 
-        let transfer_id = format!("bench_buf_{}", buf_size);
+        let transfer_id = format!("bench_{}_{}", buf_size, if enable_aead { "aead" } else { "plain" });
         let file_name = format!("recv_{}mb_{}.bin", test_file_mb, buf_size);
 
         // 1. Prepare
@@ -420,28 +699,62 @@ async fn test_tcp_streaming_buffer_benchmarks() {
                 "transferId": transfer_id,
                 "fileName": file_name,
                 "fileSize": payload_size,
-                "sha256": expected_sha256
+                "sha256": expected_sha256,
+                "senderUserId": client_id
             }))
             .send()
             .await
             .unwrap();
         let token = prep_res.json::<serde_json::Value>().await.unwrap()["oneTimeToken"].as_str().unwrap().to_string();
 
-        // 2. Stream with reader capacity matching buffer size
-        let file_async = File::open(&src_path).await.unwrap();
-        let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, buf_size);
-
         let start_time = Instant::now();
-        let upload_res = client
-            .post(format!("{}/api/auradrop/v1/upload?transferId={}&token={}", base_url, transfer_id, token))
-            .header("x-transfer-id", &transfer_id)
-            .header("x-token", &token)
-            .header("x-file-size", payload_size.to_string())
-            .header("content-length", payload_size.to_string())
-            .body(reqwest::Body::wrap_stream(reader_stream))
-            .send()
-            .await
-            .unwrap();
+
+        let upload_res = if enable_aead {
+            let session_key = derive_session_key(&token, &transfer_id, client_id, BENCH_SERVER_ID);
+            let mut encrypted_stream_bytes = Vec::new();
+
+            let mut chunk_index = 0u64;
+            let mut offset = 0;
+            while offset < payload.len() {
+                let chunk_len = std::cmp::min(buf_size, payload.len() - offset);
+                let chunk = &payload[offset..offset + chunk_len];
+                let nonce = create_chunk_nonce(1337, chunk_index);
+                let aad = format!("{}:{}", transfer_id, chunk_index);
+                let ciphertext = encrypt_chunk(&session_key, &nonce, aad.as_bytes(), chunk).unwrap();
+
+                encrypted_stream_bytes.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+                encrypted_stream_bytes.extend_from_slice(&nonce);
+                encrypted_stream_bytes.extend_from_slice(&ciphertext);
+
+                chunk_index += 1;
+                offset += chunk_len;
+            }
+
+            client
+                .post(format!("{}/api/auradrop/v1/upload", base_url))
+                .header("authorization", format!("Bearer {}", token))
+                .header("x-token", &token)
+                .header("x-transfer-id", &transfer_id)
+                .header("x-sender-id", client_id)
+                .header("x-encryption", "aead-aes256-gcm")
+                .header("x-file-size", payload_size.to_string())
+                .body(encrypted_stream_bytes)
+                .send()
+                .await
+                .unwrap()
+        } else {
+            client
+                .post(format!("{}/api/auradrop/v1/upload", base_url))
+                .header("authorization", format!("Bearer {}", token))
+                .header("x-token", &token)
+                .header("x-transfer-id", &transfer_id)
+                .header("x-sender-id", client_id)
+                .header("x-file-size", payload_size.to_string())
+                .body(payload.clone())
+                .send()
+                .await
+                .unwrap()
+        };
 
         let elapsed = start_time.elapsed();
         let mb_s = (test_file_mb as f64) / elapsed.as_secs_f64();
@@ -455,7 +768,7 @@ async fn test_tcp_streaming_buffer_benchmarks() {
         assert_eq!(comm_meta.len(), payload_size as u64);
 
         println!(
-            "  Config: {:<18} | Payload: {:>3} MB | Duration: {:>8.2?} | Verified Goodput: {:>8.2} MB/s | Status: 100% VERIFIED",
+            "  Mode: {:<26} | Payload: {:>3} MB | Duration: {:>8.2?} | Verified Goodput: {:>8.2} MB/s | Status: 100% VERIFIED",
             label, test_file_mb, elapsed, mb_s
         );
     }

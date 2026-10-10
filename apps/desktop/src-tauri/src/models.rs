@@ -107,6 +107,10 @@ pub struct PrepareUploadResponse {
     pub expires_at: i64,
     pub protocol: String,
     #[serde(default)]
+    pub encryption: Option<String>,
+    #[serde(default)]
+    pub receiver_id: Option<String>,
+    #[serde(default)]
     pub quic_port: Option<u16>,
     #[serde(default)]
     pub cert_fingerprint: Option<String>,

@@ -258,11 +258,9 @@ impl TransferService {
             return Err(err);
         }
 
-        // Step 2: Stream file bytes over authenticated TCP with bounded buffer (512 KiB)
-        let upload_url = format!(
-            "http://{}:{}/api/auradrop/v1/upload?transferId={}&token={}",
-            peer_ip, peer_port, transfer_id, prep_data.one_time_token
-        );
+        // Step 2: Stream file bytes over authenticated TCP with AEAD encryption and bounded buffer (512 KiB)
+        // Clean URL: Token and transfer ID removed from query string per security requirements
+        let upload_url = format!("http://{}:{}/api/auradrop/v1/upload", peer_ip, peer_port);
 
         let file_async = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
         let self_clone = self.clone();
@@ -275,67 +273,100 @@ impl TransferService {
         let start_time = Instant::now();
         let mut last_emit = Instant::now();
 
-        // Bounded 512 KiB streaming chunks
+        // Cryptographically derive 256-bit symmetric session key bound to sender and receiver IDs
+        let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
+        let session_key = crate::crypto::derive_session_key(
+            &prep_data.one_time_token,
+            &transfer_id,
+            &my_id,
+            target_peer_id,
+        );
+
+        let tid_for_stream = transfer_id.clone();
+        let mut chunk_counter = 0u64;
+
+        // Bounded 512 KiB streaming chunks with AES-256-GCM AEAD authenticated encryption
         let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, 512 * 1024).map(move |item| {
-            if let Ok(ref bytes) = item {
-                transferred += bytes.len() as u64;
-                if last_emit.elapsed().as_millis() >= 120 || transferred == file_size {
-                    last_emit = Instant::now();
-                    let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
-                    let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
-                    let remaining = file_size.saturating_sub(transferred);
-                    let eta = if speed > 0.0 {
-                        ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64
-                    } else {
-                        0
-                    };
-                    let percent = if file_size > 0 {
-                        (transferred as f64 / file_size as f64) * 100.0
-                    } else {
-                        100.0
-                    };
+            match item {
+                Ok(bytes) => {
+                    let chunk_len = bytes.len() as u64;
+                    transferred += chunk_len;
+                    if last_emit.elapsed().as_millis() >= 120 || transferred == file_size {
+                        last_emit = Instant::now();
+                        let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
+                        let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
+                        let remaining = file_size.saturating_sub(transferred);
+                        let eta = if speed > 0.0 {
+                            ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64
+                        } else {
+                            0
+                        };
+                        let percent = if file_size > 0 {
+                            (transferred as f64 / file_size as f64) * 100.0
+                        } else {
+                            100.0
+                        };
 
-                    let s = self_clone.clone();
-                    let tid = transfer_id_clone.clone();
-                    let fnm = file_name_clone.clone();
-                    let pnm = peer_name_clone.clone();
-                    let fp = file_path_clone.clone();
+                        let s = self_clone.clone();
+                        let tid = transfer_id_clone.clone();
+                        let fnm = file_name_clone.clone();
+                        let pnm = peer_name_clone.clone();
+                        let fp = file_path_clone.clone();
 
-                    tauri::async_runtime::spawn(async move {
-                        s.emit_progress(TransferProgressPayload {
-                            transfer_id: tid,
-                            file_name: fnm,
-                            file_size,
-                            bytes_transferred: transferred,
-                            progress_percent: percent,
-                            speed_mbps: speed,
-                            eta_seconds: eta,
-                            is_incoming: false,
-                            status: if transferred >= file_size {
-                                "completed".to_string()
-                            } else {
-                                "transferring".to_string()
-                            },
-                            peer_name: pnm,
-                            error: None,
-                            file_path: Some(fp),
-                        })
-                        .await;
-                    });
+                        tauri::async_runtime::spawn(async move {
+                            s.emit_progress(TransferProgressPayload {
+                                transfer_id: tid,
+                                file_name: fnm,
+                                file_size,
+                                bytes_transferred: transferred,
+                                progress_percent: percent,
+                                speed_mbps: speed,
+                                eta_seconds: eta,
+                                is_incoming: false,
+                                status: if transferred >= file_size {
+                                    "completed".to_string()
+                                } else {
+                                    "transferring".to_string()
+                                },
+                                peer_name: pnm,
+                                error: None,
+                                file_path: Some(fp),
+                            })
+                            .await;
+                        });
+                    }
+
+                    // Encrypt chunk with AES-256-GCM authenticated encryption (AEAD)
+                    let nonce = crate::crypto::create_chunk_nonce(1337, chunk_counter);
+                    let aad = format!("{}:{}", tid_for_stream, chunk_counter);
+                    chunk_counter += 1;
+
+                    match crate::crypto::encrypt_chunk(&session_key, &nonce, aad.as_bytes(), &bytes) {
+                        Ok(ciphertext) => {
+                            let mut frame = Vec::with_capacity(4 + 12 + ciphertext.len());
+                            frame.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+                            frame.extend_from_slice(&nonce);
+                            frame.extend_from_slice(&ciphertext);
+                            Ok(bytes::Bytes::from(frame))
+                        }
+                        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                    }
                 }
+                Err(e) => Err(e),
             }
-            item
         });
 
         let res = client
             .post(&upload_url)
             .header("expect", "")
+            .header("authorization", format!("Bearer {}", prep_data.one_time_token))
+            .header("x-token", &prep_data.one_time_token)
             .header("x-transfer-id", &transfer_id)
+            .header("x-sender-id", &my_id)
+            .header("x-encryption", "aead-aes256-gcm")
             .header("x-file-name", &file_name)
             .header("x-file-size", file_size.to_string())
-            .header("content-length", file_size.to_string())
             .header("x-sha256", &sha256_hash)
-            .header("x-token", &prep_data.one_time_token)
             .body(reqwest::Body::wrap_stream(reader_stream))
             .send()
             .await
@@ -552,15 +583,21 @@ async fn handle_prepare_upload(
         .await
         .insert(payload.transfer_id.clone(), meta);
 
+    let masked_token = if token.len() >= 6 {
+        format!("{}...***", &token[..6])
+    } else {
+        "***".to_string()
+    };
     crate::log_debug(&format!(
-        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP]",
-        payload.file_name, payload.file_size, sender_name
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}]",
+        payload.file_name, payload.file_size, sender_name, masked_token
     ));
 
     let file_id = payload
         .file_id
         .unwrap_or_else(|| payload.transfer_id.clone());
 
+    let my_id = service.identity.get_device_id().await;
     Ok(Json(PrepareUploadResponse {
         accepted: true,
         transfer_id: payload.transfer_id,
@@ -568,6 +605,8 @@ async fn handle_prepare_upload(
         one_time_token: token,
         expires_at,
         protocol: "auradrop/tcp/1".to_string(),
+        encryption: Some("aead-aes256-gcm".to_string()),
+        receiver_id: Some(my_id),
         quic_port: None,
         cert_fingerprint: None,
     }))
@@ -586,19 +625,25 @@ async fn handle_upload(
         .or_else(|| params.get("transferId").cloned())
         .unwrap_or_default();
 
+    // Secure extraction: Header authentication strictly required. URL query parameter tokens removed.
     let presented_token = headers
-        .get("x-token")
-        .or_else(|| headers.get("x-one-time-token"))
-        .or_else(|| headers.get("x-session-token"))
+        .get("authorization")
         .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| params.get("token").cloned())
+        .and_then(|s| s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")))
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-token")
+                .or_else(|| headers.get("x-one-time-token"))
+                .and_then(|h| h.to_str().ok())
+                .map(|s| s.trim().to_string())
+        })
         .unwrap_or_default();
 
     if transfer_id.is_empty() || presented_token.is_empty() {
         return Err((
             StatusCode::UNAUTHORIZED,
-            Json(json!({"error": "Missing transferId or token"})),
+            Json(json!({"error": "Missing transferId or authorization token in headers"})),
         ));
     }
 
@@ -639,6 +684,29 @@ async fn handle_upload(
         }
     };
 
+    // Verify peer identity binding
+    let presented_sender_id = headers
+        .get("x-sender-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    if !session.sender_id.is_empty() && !presented_sender_id.is_empty() && presented_sender_id != session.sender_id {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Sender identity mismatch: transfer token bound to different device"})),
+        ));
+    }
+
+    // Sanitized logging: Mask secret token in debug logs
+    let masked_token = if presented_token.len() >= 6 {
+        format!("{}...***", &presented_token[..6])
+    } else {
+        "***".to_string()
+    };
+    crate::log_debug(&format!(
+        "[AuraTransfer] Inbound TCP upload authenticated: {} ({} bytes) from {} [Token: {}]",
+        session.file_name, session.file_size, session.sender_name, masked_token
+    ));
+
     // Validate declared file size from headers if provided
     if let Some(decl_size_str) = headers.get("x-file-size").and_then(|h| h.to_str().ok()) {
         if let Ok(decl_size) = decl_size_str.parse::<u64>() {
@@ -669,6 +737,24 @@ async fn handle_upload(
         }
     };
 
+    // Determine encryption mode
+    let encryption_mode = headers
+        .get("x-encryption")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("none");
+    let is_aead = encryption_mode == "aead-aes256-gcm";
+    let my_device_id = service.identity.get_device_id().await;
+    let session_key = if is_aead {
+        Some(crate::crypto::derive_session_key(
+            &session.token,
+            &session.transfer_id,
+            &session.sender_id,
+            &my_device_id,
+        ))
+    } else {
+        None
+    };
+
     // Bounded buffer for backpressured async disk writing (512 KiB)
     let mut writer = tokio::io::BufWriter::with_capacity(512 * 1024, temp_file);
     let mut hasher = Sha256::new();
@@ -677,6 +763,8 @@ async fn handle_upload(
     let mut last_emit = Instant::now();
 
     let mut stream = body.into_data_stream();
+    let mut stream_buf = Vec::with_capacity(1024 * 1024);
+    let mut chunk_index = 0u64;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
@@ -691,18 +779,67 @@ async fn handle_upload(
             }
         };
 
-        // Write directly with backpressure
-        if let Err(e) = writer.write_all(&chunk).await {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            service.sessions.write().await.remove(&transfer_id);
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Disk write error: {}", e)})),
-            ));
-        }
+        if is_aead {
+            stream_buf.extend_from_slice(&chunk);
 
-        hasher.update(&chunk);
-        transferred += chunk.len() as u64;
+            while stream_buf.len() >= 16 {
+                let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
+                let total_frame_len = 4 + 12 + payload_len;
+                if stream_buf.len() < total_frame_len {
+                    break; // Await more network bytes to complete frame
+                }
+
+                let mut nonce = [0u8; 12];
+                nonce.copy_from_slice(&stream_buf[4..16]);
+                let ciphertext_and_tag = &stream_buf[16..total_frame_len];
+                let aad = format!("{}:{}", session.transfer_id, chunk_index);
+
+                let plaintext = match crate::crypto::decrypt_chunk(
+                    session_key.as_ref().unwrap(),
+                    &nonce,
+                    aad.as_bytes(),
+                    ciphertext_and_tag,
+                ) {
+                    Ok(pt) => pt,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        service.sessions.write().await.remove(&transfer_id);
+                        return Err((
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(json!({"error": format!("AEAD integrity authentication failure: {}", e)})),
+                        ));
+                    }
+                };
+
+                if let Err(e) = writer.write_all(&plaintext).await {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    service.sessions.write().await.remove(&transfer_id);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": format!("Disk write error: {}", e)})),
+                    ));
+                }
+
+                hasher.update(&plaintext);
+                transferred += plaintext.len() as u64;
+                chunk_index += 1;
+
+                stream_buf.drain(0..total_frame_len);
+            }
+        } else {
+            // Write directly with backpressure (plain stream fallback)
+            if let Err(e) = writer.write_all(&chunk).await {
+                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                service.sessions.write().await.remove(&transfer_id);
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("Disk write error: {}", e)})),
+                ));
+            }
+
+            hasher.update(&chunk);
+            transferred += chunk.len() as u64;
+        }
 
         if transferred > session.file_size {
             let _ = tokio::fs::remove_file(&temp_file_path).await;
