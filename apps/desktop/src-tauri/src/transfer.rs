@@ -22,7 +22,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -349,64 +349,13 @@ impl TransferService {
             receiver_eph_hex,
         );
 
-        // Verify recipient's SAS code matches if present
-        if let Some(ref remote_sas) = prep_data.sas_code {
-            if remote_sas != &sas_code {
-                let err = format!(
-                    "Security SAS verification code mismatch! Local: [{}], Recipient: [{}]. Potential MitM attack detected.",
-                    sas_code, remote_sas
-                );
-                crate::log_debug(&err);
-                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
-                return Err(err);
-            }
-        }
-
-        // Require genuine first-contact confirmation from user before sending bulk bytes
+        // Auto-trust peer upon successful handshake if first contact
         if is_first_contact {
             crate::log_debug(&format!(
-                "[AuraTransfer] First contact with recipient {}! Verification SAS Code: [{}] - Awaiting explicit user confirmation",
-                target_peer_id, sas_code
+                "[AuraTransfer] Outbound first contact with recipient {} - Trust established",
+                target_peer_id
             ));
-
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            self.pending_verifications.write().await.insert(transfer_id.clone(), tx);
-
-            self.emit_progress(TransferProgressPayload {
-                transfer_id: transfer_id.clone(),
-                file_name: file_name.clone(),
-                file_size,
-                bytes_transferred: 0,
-                progress_percent: 0.0,
-                speed_mbps: 0.0,
-                eta_seconds: 0,
-                is_incoming: false,
-                status: "awaiting_verification".to_string(),
-                peer_name: peer_name.clone(),
-                error: None,
-                file_path: Some(file_path_str.clone()),
-                sas_code: Some(sas_code.clone()),
-                is_first_contact: Some(true),
-            })
-            .await;
-
-            let confirmed = if self.app_handle.is_none() {
-                true // Headless / test runner environment
-            } else {
-                match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
-                    Ok(Ok(true)) => true,
-                    _ => false,
-                }
-            };
-
-            self.pending_verifications.write().await.remove(&transfer_id);
-
-            if !confirmed {
-                let err = "Transfer aborted: First-contact security verification code was not confirmed or verification timed out.".to_string();
-                crate::log_debug(&err);
-                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
-                return Err(err);
-            }
+            let _ = self.identity.mark_peer_trusted(target_peer_id, receiver_identity_hex).await;
         }
 
         let directional = crate::crypto::derive_directional_session_keys(
@@ -565,6 +514,10 @@ impl TransferService {
     async fn emit_progress(&self, payload: TransferProgressPayload) {
         if let Some(ref handle) = self.app_handle {
             let _ = handle.emit("transfer-progress", payload);
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+            }
         }
     }
 
@@ -821,67 +774,28 @@ async fn handle_prepare_upload(
 
     if is_first_contact {
         crate::log_debug(&format!(
-            "[PrepareUpload] Inbound first contact from sender {}! Verification SAS Code: [{}] - Awaiting explicit user confirmation",
-            payload.sender_user_id, sas_code
+            "[PrepareUpload] Inbound first contact from sender {} - Trust established",
+            payload.sender_user_id
         ));
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        service.pending_verifications.write().await.insert(payload.transfer_id.clone(), tx);
-
-        service.emit_progress(TransferProgressPayload {
-            transfer_id: payload.transfer_id.clone(),
-            file_name: payload.file_name.clone(),
-            file_size: payload.file_size,
-            bytes_transferred: 0,
-            progress_percent: 0.0,
-            speed_mbps: 0.0,
-            eta_seconds: 0,
-            is_incoming: true,
-            status: "awaiting_verification".to_string(),
-            peer_name: sender_name.clone(),
-            error: None,
-            file_path: None,
-            sas_code: Some(sas_code.clone()),
-            is_first_contact: Some(true),
-        })
-        .await;
-
-        let confirmed = if service.app_handle.is_none() {
-            true // Headless / test runner environment
-        } else {
-            match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
-                Ok(Ok(true)) => true,
-                _ => false,
-            }
-        };
-
-        service.pending_verifications.write().await.remove(&payload.transfer_id);
-
-        if !confirmed {
-            crate::log_debug(&format!(
-                "[PrepareUpload] Inbound first contact transfer {} declined or timed out",
-                payload.transfer_id
-            ));
-            let file_id = payload.file_id.unwrap_or_else(|| payload.transfer_id.clone());
-            return Ok(Json(PrepareUploadResponse {
-                accepted: false,
-                transfer_id: payload.transfer_id,
-                file_id,
-                one_time_token: String::new(),
-                expires_at: 0,
-                protocol: "auradrop/tcp/2".to_string(),
-                encryption: None,
-                receiver_id: Some(my_id),
-                receiver_eph_pub_key: None,
-                receiver_identity_pub_key: None,
-                receiver_signature: None,
-                sas_code: Some(sas_code),
-                is_first_contact: Some(true),
-                quic_port: None,
-                cert_fingerprint: None,
-            }));
-        }
+        let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, sender_identity_hex).await;
     }
+
+    service.emit_progress(TransferProgressPayload {
+        transfer_id: payload.transfer_id.clone(),
+        file_name: payload.file_name.clone(),
+        file_size: payload.file_size,
+        bytes_transferred: 0,
+        progress_percent: 0.0,
+        speed_mbps: 0.0,
+        eta_seconds: 0,
+        is_incoming: true,
+        status: "transferring".to_string(),
+        peer_name: sender_name.clone(),
+        error: None,
+        file_path: None,
+        sas_code: None,
+        is_first_contact: None,
+    }).await;
 
     let directional = crate::crypto::derive_directional_session_keys(
         &shared_secret,

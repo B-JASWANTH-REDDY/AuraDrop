@@ -657,11 +657,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         _showIncomingTransferModal(event);
         break;
 
-      case 'transferVerification':
-        HapticFeedback.heavyImpact();
-        setState(() => _transferState = TransferState.waitingForAccept);
-        _showOutboundVerificationModal(event);
-        break;
+
 
       case 'peerExpired':
         final expiredId = event['peerId']?.toString();
@@ -1099,88 +1095,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 'wants to send $totalFiles file(s) • ${_formatBytes(totalBytes)}',
                 style: TextStyle(fontSize: 13, color: theme.textSecondary),
               ),
-              const SizedBox(height: 16),
-              if (isFirstContact) ...[
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: theme.isDark ? const Color(0xFF1C1C1E) : const Color(0xFFF2F2F7),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.amber.withValues(alpha: 0.3)),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(Icons.shield_outlined, size: 16, color: Colors.amber),
-                          const SizedBox(width: 8),
-                          Text(
-                            'First-Contact Security Verification',
-                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.amber.shade400),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Compare this code with the screen on $senderName:',
-                        style: TextStyle(fontSize: 12, color: theme.textSecondary),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: theme.isDark ? Colors.black : Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: theme.border),
-                        ),
-                        child: Text(
-                          sas.isNotEmpty ? sas : '--- ---',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontFamily: 'monospace',
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 4.0,
-                            color: theme.textPrimary,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Confirm only if the exact same 6 digits appear on both devices.',
-                        style: TextStyle(fontSize: 11, color: theme.textSecondary),
-                        textAlign: TextAlign.center,
-                      ),
-                    ],
-                  ),
-                ),
-              ] else if (sas.isNotEmpty) ...[
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: theme.background,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: theme.border),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.shield_outlined, size: 14, color: theme.textSecondary),
-                      const SizedBox(width: 8),
-                      Text(
-                        'SAS: $sas',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontFamily: 'monospace',
-                          fontWeight: FontWeight.w600,
-                          color: theme.textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
               const SizedBox(height: 24),
               Row(
                 children: [
@@ -1189,14 +1103,11 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                       height: 48,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isFirstContact
-                              ? Colors.red.withValues(alpha: 0.15)
-                              : (theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6)),
-                          foregroundColor: isFirstContact ? Colors.red.shade400 : (theme.isDark ? Colors.white : Colors.black87),
+                          backgroundColor: theme.isDark ? const Color(0xFF3A3A3C) : const Color(0xFFD1D1D6),
+                          foregroundColor: theme.isDark ? Colors.white : Colors.black87,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(24),
-                            side: isFirstContact ? BorderSide(color: Colors.red.withValues(alpha: 0.3)) : BorderSide.none,
                           ),
                         ),
                         onPressed: () async {
@@ -1205,9 +1116,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                           setState(() => _transferState = TransferState.idle);
                           await NativeBridgeService.declineTransfer(transferId);
                         },
-                        child: Text(
-                          isFirstContact ? 'Mismatched / Reject' : 'Decline',
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                        child: const Text(
+                          'Decline',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
                         ),
                       ),
                     ),
@@ -1244,148 +1155,10 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                           });
                           await NativeBridgeService.acceptTransfer(transferId);
                         },
-                        child: Text(
-                          isFirstContact ? 'Codes Match — Confirm' : 'Accept',
-                          style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                        child: const Text(
+                          'Accept',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
                         ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  void _showOutboundVerificationModal(Map<dynamic, dynamic> req) {
-    final theme = AuraTheme.of(context);
-    final transferId = req['transferId']?.toString() ?? '';
-    final peerName = req['peerName']?.toString() ?? 'Remote Peer';
-    final fileName = req['fileName']?.toString() ?? 'File';
-    final totalBytes = (req['totalBytes'] as num?)?.toInt() ?? 0;
-    final sas = req['sasCode']?.toString() ?? req['sas']?.toString() ?? '';
-
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return Container(
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(24),
-          decoration: BoxDecoration(
-            color: theme.cardBackground,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: Colors.amber.withValues(alpha: 0.4), width: 1.5),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.textSecondary.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.shield_outlined, size: 18, color: Colors.amber),
-                  const SizedBox(width: 8),
-                  Text(
-                    'First-Contact Security Verification',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Colors.amber.shade400),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Sending $fileName • ${_formatBytes(totalBytes)}',
-                style: TextStyle(fontSize: 13, color: theme.textSecondary),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'Compare this code with the screen on $peerName:',
-                style: TextStyle(fontSize: 13, color: theme.textSecondary),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                decoration: BoxDecoration(
-                  color: theme.isDark ? Colors.black : Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: theme.border),
-                ),
-                child: Center(
-                  child: Text(
-                    sas.isNotEmpty ? sas : '--- ---',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontFamily: 'monospace',
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 4.0,
-                      color: theme.textPrimary,
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Confirm only if the exact same 6 digits appear on both devices.',
-                style: TextStyle(fontSize: 11, color: theme.textSecondary),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    child: SizedBox(
-                      height: 48,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red.withValues(alpha: 0.15),
-                          foregroundColor: Colors.red.shade400,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(24),
-                            side: BorderSide(color: Colors.red.withValues(alpha: 0.3)),
-                          ),
-                        ),
-                        onPressed: () async {
-                          Navigator.pop(ctx);
-                          setState(() => _transferState = TransferState.idle);
-                          await NativeBridgeService.confirmVerification(transferId, false);
-                        },
-                        child: const Text('Mismatched / Reject', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: SizedBox(
-                      height: 48,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF0A84FF),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-                        ),
-                        onPressed: () async {
-                          Navigator.pop(ctx);
-                          await NativeBridgeService.confirmVerification(transferId, true);
-                        },
-                        child: const Text('Codes Match — Confirm', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
                       ),
                     ),
                   ),

@@ -124,10 +124,20 @@ object AuraAeadCrypto {
         senderIdentityPubHex: String = "",
         receiverIdentityPubHex: String = ""
     ): ByteArray {
+        val normalizedSecret = if (sharedSecret.size == 32) {
+            sharedSecret
+        } else if (sharedSecret.size > 32) {
+            sharedSecret.copyOfRange(sharedSecret.size - 32, sharedSecret.size)
+        } else {
+            val padded = ByteArray(32)
+            System.arraycopy(sharedSecret, 0, padded, 32 - sharedSecret.size, sharedSecret.size)
+            padded
+        }
+
         val mac = Mac.getInstance("HmacSHA256")
         val saltBytes = "$transferId:$token".toByteArray(Charsets.UTF_8)
         mac.init(SecretKeySpec(saltBytes, "HmacSHA256"))
-        val prk = mac.doFinal(sharedSecret)
+        val prk = mac.doFinal(normalizedSecret)
 
         val prkKey = SecretKeySpec(prk, "HmacSHA256")
         mac.init(prkKey)
@@ -2336,8 +2346,11 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
-                    val downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
-                    if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                    var downloadsDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "AuraDrop")
+                    if (!downloadsDir.exists() && !downloadsDir.mkdirs()) {
+                        downloadsDir = File(applicationContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: applicationContext.filesDir, "AuraDrop")
+                        if (!downloadsDir.exists()) downloadsDir.mkdirs()
+                    }
 
                     val finalFile = resolveUniqueFile(downloadsDir, fileName)
                     val tempPartFile = File(downloadsDir, ".${fileName}.${xferId}.part")
@@ -3043,34 +3056,8 @@ class MainActivity : FlutterActivity() {
             }
 
             if (isFirstContact) {
-                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Verification SAS: [$sasCode] - Awaiting user confirmation")
-                val verificationDeferred = CompletableDeferred<Boolean>()
-                pendingOutboundVerifications[transferId] = verificationDeferred
-
-                sendEvent("transferVerification", mapOf(
-                    "transferId" to transferId,
-                    "peerName" to targetIp,
-                    "fileName" to fileName,
-                    "totalBytes" to fileSize,
-                    "sasCode" to sasCode,
-                    "isFirstContact" to true,
-                    "isSender" to true
-                ))
-
-                val confirmed = withTimeoutOrNull(60000L) {
-                    verificationDeferred.await()
-                } ?: false
-                pendingOutboundVerifications.remove(transferId)
-
-                if (!confirmed) {
-                    val err = "Transfer aborted: First-contact security verification code was not confirmed or verification timed out."
-                    Log.w(TAG, err)
-                    sendEvent("transferError", mapOf(
-                        "transferId" to transferId,
-                        "error" to err
-                    ))
-                    return false
-                }
+                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Trust established")
+                AuraIdentityManager.markPeerTrusted(applicationContext, receiverId, receiverIdentityPubKey)
             }
             val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
                 sharedSecret,
