@@ -379,7 +379,6 @@ impl TransferService {
         let file_name_clone = file_name.clone();
         let peer_name_clone = peer_name.clone();
         let file_path_clone = file_path_str.clone();
-        let sas_code_clone = sas_code.clone();
 
         let mut transferred = 0u64;
         let start_time = Instant::now();
@@ -415,8 +414,6 @@ impl TransferService {
                         let fnm = file_name_clone.clone();
                         let pnm = peer_name_clone.clone();
                         let fp = file_path_clone.clone();
-                        let sas = sas_code_clone.clone();
-
                         tauri::async_runtime::spawn(async move {
                             s.emit_progress(TransferProgressPayload {
                                 transfer_id: tid,
@@ -435,8 +432,8 @@ impl TransferService {
                                 peer_name: pnm,
                                 error: None,
                                 file_path: Some(fp),
-                                sas_code: Some(sas),
-                                is_first_contact: Some(is_first_contact),
+                                sas_code: None,
+                                is_first_contact: None,
                             })
                             .await;
                         });
@@ -1166,8 +1163,8 @@ async fn handle_upload(
                     } else {
                         None
                     },
-                    sas_code: Some(session.sas_code.clone()),
-                    is_first_contact: Some(session.is_first_contact),
+                    sas_code: None,
+                    is_first_contact: None,
                 })
                 .await;
         }
@@ -1250,8 +1247,8 @@ async fn handle_upload(
             peer_name: session.sender_name.clone(),
             error: None,
             file_path: Some(final_dest.to_string_lossy().to_string()),
-            sas_code: Some(session.sas_code.clone()),
-            is_first_contact: Some(session.is_first_contact),
+            sas_code: None,
+            is_first_contact: None,
         })
         .await;
 

@@ -2226,10 +2226,7 @@ class MainActivity : FlutterActivity() {
                         "fileName" to fileName,
                         "totalBytes" to fileSize,
                         "totalFiles" to 1,
-                        "fileCount" to 1,
-                        "sas" to sasCodeStr,
-                        "sasCode" to sasCodeStr,
-                        "isFirstContact" to isFirstContact
+                        "fileCount" to 1
                     )
                     sendEvent("incomingShareRequest", shareEventMap)
                     sendEvent("transferRequest", shareEventMap)
@@ -3034,26 +3031,7 @@ class MainActivity : FlutterActivity() {
 
             val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
             val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
-            val sasCode = AuraAeadCrypto.computeSasCode(
-                sharedSecret,
-                transferId,
-                deviceId,
-                receiverId,
-                AuraIdentityManager.getPublicKeyHex(),
-                receiverIdentityPubKey,
-                senderSec1.toHex(),
-                receiverEphHex
-            )
-            val remoteSas = prepResp.optString("sasCode", "")
-            if (remoteSas.isNotEmpty() && remoteSas != sasCode) {
-                val err = "Security SAS verification code mismatch! Local: [$sasCode], Recipient: [$remoteSas]. Potential MitM attack detected."
-                Log.e(TAG, err)
-                sendEvent("transferError", mapOf(
-                    "transferId" to transferId,
-                    "error" to err
-                ))
-                return false
-            }
+
 
             if (isFirstContact) {
                 Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Trust established")

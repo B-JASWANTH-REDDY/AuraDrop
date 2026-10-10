@@ -416,9 +416,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           'fileName': fileName,
           'totalBytes': fileSize,
           'totalFiles': 1,
-          'sas': req['sasCode']?.toString() ?? req['sas']?.toString() ?? '',
-          'sasCode': req['sasCode']?.toString() ?? req['sas']?.toString() ?? '',
-          'isFirstContact': req['isFirstContact'] == true,
         });
       });
 
@@ -1039,9 +1036,6 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     final senderName = req['senderName']?.toString() ?? 'Nearby Peer';
     final totalFiles = req['totalFiles']?.toString() ?? '1';
     final totalBytes = (req['totalBytes'] as num?)?.toInt() ?? 0;
-    final sas = req['sasCode']?.toString() ?? req['sas']?.toString() ?? '';
-    final isFirstContact = req['isFirstContact'] == true;
-
     showModalBottomSheet(
       context: context,
       isDismissible: false,
@@ -1055,8 +1049,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             color: theme.cardBackground,
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
-              color: isFirstContact ? Colors.amber.withValues(alpha: 0.4) : theme.border,
-              width: isFirstContact ? 1.5 : 1.0,
+              color: theme.border,
+              width: 1.0,
             ),
           ),
           child: Column(
