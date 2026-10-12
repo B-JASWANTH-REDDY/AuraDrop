@@ -705,6 +705,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
         break;
 
+      case 'transferComplete':
       case 'transferCompleted':
         HapticFeedback.mediumImpact();
         final path = event['savedPath']?.toString() ?? '';
@@ -858,6 +859,18 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
     // 1. Direct High-Speed Wi-Fi LAN HTTP Socket streaming route (AirDrop / LocalSend class)
     if (peer.ip.isNotEmpty && peer.ip != 'WebRTC P2P' && peer.port > 0) {
+      if (Platform.isAndroid) {
+        try {
+          await NativeBridgeService.sendFiles(
+            targetIp: peer.ip,
+            targetPort: peer.port,
+            files: _selectedFiles,
+          );
+          return;
+        } catch (e) {
+          debugPrint('[AuraDrop] Native send error: $e');
+        }
+      }
       bool allSuccess = true;
       for (final f in _selectedFiles) {
         final filePath = f.path.isNotEmpty ? f.path : f.uri;

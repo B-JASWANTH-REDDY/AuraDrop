@@ -83,7 +83,10 @@ export const App: React.FC = () => {
       setActiveTransfer(payload);
 
       if (payload.status === 'completed' || payload.status === 'failed') {
-        setHistory((prev) => [payload, ...prev.slice(0, 49)]);
+        setHistory((prev) => {
+          const filtered = prev.filter((item) => item.transferId !== payload.transferId);
+          return [payload, ...filtered.slice(0, 49)];
+        });
       }
     });
 

@@ -381,8 +381,10 @@ impl TransferService {
         let file_path_clone = file_path_str.clone();
 
         let mut transferred = 0u64;
-        let start_time = Instant::now();
         let mut last_emit = Instant::now();
+        let mut last_speed_time = Instant::now();
+        let mut last_speed_bytes = 0u64;
+        let mut smoothed_speed = 0.0f64;
 
         let tid_for_stream = transfer_id.clone();
         let mut chunk_counter = 0u64;
@@ -395,8 +397,19 @@ impl TransferService {
                     transferred += chunk_len;
                     if last_emit.elapsed().as_millis() >= 120 || transferred == file_size {
                         last_emit = Instant::now();
-                        let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
-                        let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
+                        let time_delta = last_speed_time.elapsed().as_secs_f64().max(0.001);
+                        if time_delta >= 0.15 || transferred == file_size {
+                            let bytes_delta = transferred.saturating_sub(last_speed_bytes);
+                            let sample_speed = (bytes_delta as f64 / (1024.0 * 1024.0)) / time_delta;
+                            smoothed_speed = if smoothed_speed == 0.0 {
+                                sample_speed
+                            } else {
+                                0.35 * sample_speed + 0.65 * smoothed_speed
+                            };
+                            last_speed_time = Instant::now();
+                            last_speed_bytes = transferred;
+                        }
+                        let speed = smoothed_speed.max(0.0);
                         let remaining = file_size.saturating_sub(transferred);
                         let eta = if speed > 0.0 {
                             ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64
@@ -511,10 +524,6 @@ impl TransferService {
     async fn emit_progress(&self, payload: TransferProgressPayload) {
         if let Some(ref handle) = self.app_handle {
             let _ = handle.emit("transfer-progress", payload);
-            if let Some(window) = handle.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.unminimize();
-            }
         }
     }
 
@@ -777,6 +786,13 @@ async fn handle_prepare_upload(
         let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, sender_identity_hex).await;
     }
 
+    if let Some(ref handle) = service.app_handle {
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
+        }
+    }
+
     service.emit_progress(TransferProgressPayload {
         transfer_id: payload.transfer_id.clone(),
         file_name: payload.file_name.clone(),
@@ -1022,8 +1038,10 @@ async fn handle_upload(
     let mut writer = tokio::io::BufWriter::with_capacity(512 * 1024, temp_file);
     let mut hasher = Sha256::new();
     let mut transferred = 0u64;
-    let start_time = Instant::now();
     let mut last_emit = Instant::now();
+    let mut last_speed_time = Instant::now();
+    let mut last_speed_bytes = 0u64;
+    let mut smoothed_speed = 0.0f64;
 
     let mut stream = body.into_data_stream();
     let mut stream_buf = Vec::with_capacity(1024 * 1024);
@@ -1127,8 +1145,19 @@ async fn handle_upload(
         // Throttled UI progress event (5-10 per second: 120ms interval)
         if last_emit.elapsed().as_millis() >= 120 || transferred == session.file_size {
             last_emit = Instant::now();
-            let elapsed = start_time.elapsed().as_secs_f64().max(0.001);
-            let speed = (transferred as f64 / (1024.0 * 1024.0)) / elapsed;
+            let time_delta = last_speed_time.elapsed().as_secs_f64().max(0.001);
+            if time_delta >= 0.15 || transferred == session.file_size {
+                let bytes_delta = transferred.saturating_sub(last_speed_bytes);
+                let sample_speed = (bytes_delta as f64 / (1024.0 * 1024.0)) / time_delta;
+                smoothed_speed = if smoothed_speed == 0.0 {
+                    sample_speed
+                } else {
+                    0.35 * sample_speed + 0.65 * smoothed_speed
+                };
+                last_speed_time = Instant::now();
+                last_speed_bytes = transferred;
+            }
+            let speed = smoothed_speed.max(0.0);
             let remaining = session.file_size.saturating_sub(transferred);
             let eta = if speed > 0.0 {
                 ((remaining as f64 / (1024.0 * 1024.0)) / speed).ceil() as u64

@@ -6,10 +6,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.MediaScannerConnection
+import android.provider.MediaStore
 import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -497,6 +499,12 @@ object AuraIdentityManager {
         Log.i("AuraIdentity", "Marked peer $peerId trusted with public key $peerPubHex")
     }
 
+    fun isPeerTrusted(context: Context, peerId: String): Boolean {
+        if (peerId.isBlank()) return false
+        val prefs = context.getSharedPreferences("auradrop_trusted_peers", Context.MODE_PRIVATE)
+        return prefs.contains(peerId)
+    }
+
     fun verifyPeerHandshake(
         context: Context,
         peerId: String,
@@ -675,6 +683,7 @@ class MainActivity : FlutterActivity() {
     private val httpUploadSessions = ConcurrentHashMap<String, HttpUploadSession>()
     private val pendingHttpDecisions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
     private val pendingOutboundVerifications = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+    private val recentlyApprovedSenders = ConcurrentHashMap<String, Long>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -2187,55 +2196,69 @@ class MainActivity : FlutterActivity() {
                         "expiresAt" to expiresAt
                     ))
 
-                    showSystemIncomingShareNotification(
-                        transferId = xferId,
-                        senderName = senderName,
-                        senderDeviceName = senderName,
-                        totalFiles = 1,
-                        totalBytes = fileSize,
-                        firstFileName = fileName,
-                        sasCode = sasCodeStr
-                    )
+                    val isRecentlyApproved = (recentlyApprovedSenders[senderUserId]?.let { System.currentTimeMillis() - it < 300_000L } == true)
+                    val isPeerTrusted = !isFirstContact || AuraIdentityManager.isPeerTrusted(applicationContext, senderUserId) || dbHelper.getTrustedPeers().any { it["peerId"] == senderUserId }
+                    val shouldAutoAccept = isRecentlyApproved || isPeerTrusted
 
-                    val decisionDeferred = CompletableDeferred<Boolean>()
-                    pendingHttpDecisions[xferId] = decisionDeferred
+                    val accepted = if (shouldAutoAccept) {
+                        Log.i(TAG, "Auto-accepting incoming transfer from trusted/recent peer: $senderUserId ($senderName)")
+                        recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
+                        true
+                    } else {
+                        showSystemIncomingShareNotification(
+                            transferId = xferId,
+                            senderName = senderName,
+                            senderDeviceName = senderName,
+                            totalFiles = 1,
+                            totalBytes = fileSize,
+                            firstFileName = fileName,
+                            sasCode = sasCodeStr
+                        )
 
-                    // Show AirDrop floating island overlay (lock screen / home screen / other apps)
-                    AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
-                        transferId = xferId,
-                        senderName = senderName,
-                        fileName = fileName,
-                        totalBytes = fileSize,
-                        onAccept = {
-                            Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
-                            acceptIncomingTransfer(xferId)
-                        },
-                        onDecline = {
-                            Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
-                            declineIncomingTransfer(xferId)
+                        val decisionDeferred = CompletableDeferred<Boolean>()
+                        pendingHttpDecisions[xferId] = decisionDeferred
+
+                        // Show AirDrop floating island overlay (lock screen / home screen / other apps)
+                        AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
+                            transferId = xferId,
+                            senderName = senderName,
+                            fileName = fileName,
+                            totalBytes = fileSize,
+                            onAccept = {
+                                Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
+                                acceptIncomingTransfer(xferId)
+                            },
+                            onDecline = {
+                                Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
+                                declineIncomingTransfer(xferId)
+                            }
+                        )
+
+                        // Also dispatch Flutter event so in-app receive dialog displays if user is in app
+                        val shareEventMap = mapOf(
+                            "requestId" to xferId,
+                            "transferId" to xferId,
+                            "senderName" to senderName,
+                            "senderDeviceId" to senderUserId,
+                            "firstFileName" to fileName,
+                            "fileName" to fileName,
+                            "totalBytes" to fileSize,
+                            "totalFiles" to 1,
+                            "fileCount" to 1
+                        )
+                        sendEvent("incomingShareRequest", shareEventMap)
+                        sendEvent("transferRequest", shareEventMap)
+
+                        // Await user's explicit Accept or Decline decision (up to 60 seconds)
+                        val userDecision = withTimeoutOrNull(60000L) {
+                            decisionDeferred.await()
+                        } ?: false
+                        pendingHttpDecisions.remove(xferId)
+                        if (userDecision) {
+                            recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
                         }
-                    )
-
-                    // Also dispatch Flutter event so in-app receive dialog displays if user is in app
-                    val shareEventMap = mapOf(
-                        "requestId" to xferId,
-                        "transferId" to xferId,
-                        "senderName" to senderName,
-                        "senderDeviceId" to senderUserId,
-                        "firstFileName" to fileName,
-                        "fileName" to fileName,
-                        "totalBytes" to fileSize,
-                        "totalFiles" to 1,
-                        "fileCount" to 1
-                    )
-                    sendEvent("incomingShareRequest", shareEventMap)
-                    sendEvent("transferRequest", shareEventMap)
-
-                    // Await user's explicit Accept or Decline decision (up to 60 seconds)
-                    val accepted = withTimeoutOrNull(60000L) {
-                        decisionDeferred.await()
-                    } ?: false
-                    pendingHttpDecisions.remove(xferId)
+                        userDecision
+                    }
 
                     if (accepted) {
                         sendJsonResponse(200, "OK", JSONObject().apply {
@@ -2371,6 +2394,9 @@ class MainActivity : FlutterActivity() {
                     var totalWritten = 0L
                     val startTime = System.currentTimeMillis()
                     var lastProgressTime = 0L
+                    var lastSpeedTime = startTime
+                    var lastSpeedBytes = 0L
+                    var smoothedSpeed = 0.0
 
                     startForegroundTransferService("Receiving $fileName...", 0)
                     AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
@@ -2419,8 +2445,19 @@ class MainActivity : FlutterActivity() {
                             val now = System.currentTimeMillis()
                             if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || totalWritten == fileSize) {
                                 lastProgressTime = now
-                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                                val speed = (totalWritten / elapsedSec).toLong()
+                                val timeDeltaSec = Math.max(0.001, (now - lastSpeedTime) / 1000.0)
+                                if (timeDeltaSec >= 0.15 || totalWritten == fileSize) {
+                                    val bytesDelta = totalWritten - lastSpeedBytes
+                                    val currentSampleSpeed = bytesDelta / timeDeltaSec
+                                    smoothedSpeed = if (smoothedSpeed == 0.0) {
+                                        currentSampleSpeed
+                                    } else {
+                                        0.35 * currentSampleSpeed + 0.65 * smoothedSpeed
+                                    }
+                                    lastSpeedTime = now
+                                    lastSpeedBytes = totalWritten
+                                }
+                                val speed = smoothedSpeed.toLong().coerceAtLeast(0L)
                                 val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
                                 val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
 
@@ -2495,8 +2532,32 @@ class MainActivity : FlutterActivity() {
                         }
                     }
 
-                    // Atomic rename from temp file to final destination
-                    tempPartFile.renameTo(finalFile)
+                    // Atomic rename from temp file to final destination with fallback copy
+                    var committed = tempPartFile.renameTo(finalFile)
+                    if (!committed) {
+                        try {
+                            tempPartFile.copyTo(finalFile, overwrite = true)
+                            tempPartFile.delete()
+                            committed = true
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Fallback copy of part file failed: ${e.message}")
+                        }
+                    }
+
+                    if (!finalFile.exists() || finalFile.length() != fileSize) {
+                        try { tempPartFile.delete() } catch (_: Exception) {}
+                        httpUploadSessions.remove(xferId)
+                        stopForegroundTransferService()
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        sendJsonResponse(500, "Internal Server Error", JSONObject().apply {
+                            put("error", "Failed to commit destination file to storage")
+                        })
+                        return@withContext
+                    }
+
+                    // Register with MediaStore (so photos/videos show in Gallery immediately and downloads in system Downloads)
+                    registerAndExportToMediaStore(finalFile)
+
                     if (sessionMeta.isFirstContact) {
                         AuraIdentityManager.markPeerTrusted(applicationContext, sessionMeta.senderUserId, sessionMeta.senderIdentityPubHex)
                     }
@@ -2504,12 +2565,6 @@ class MainActivity : FlutterActivity() {
 
                     stopForegroundTransferService()
                     AuraOverlayManager.getInstance(applicationContext).markTransferComplete(fileName, fileSize)
-
-                    MediaScannerConnection.scanFile(
-                        applicationContext,
-                        arrayOf(finalFile.absolutePath),
-                        null
-                    ) { _, _ -> }
 
                     val elapsedTotalSec = Math.max(0.001, (System.currentTimeMillis() - startTime) / 1000.0)
                     val avgSpeed = (totalWritten / elapsedTotalSec).toLong()
@@ -2529,14 +2584,17 @@ class MainActivity : FlutterActivity() {
                         "createdAt" to System.currentTimeMillis()
                     ))
 
-                    sendEvent("transferComplete", mapOf(
+                    val completeMap = mapOf(
                         "transferId" to xferId,
                         "fileName" to finalFile.name,
                         "fileSize" to totalWritten,
                         "localPath" to finalFile.absolutePath,
+                        "savedPath" to finalFile.absolutePath,
                         "sha256" to calculatedSha256,
                         "verified" to true
-                    ))
+                    )
+                    sendEvent("transferComplete", completeMap)
+                    sendEvent("transferCompleted", completeMap)
 
                     cancelSystemIncomingShareNotification(xferId)
 
@@ -2561,6 +2619,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun acceptIncomingTransfer(transferId: String) {
+        val sessionMeta = httpUploadSessions[transferId]
+        if (sessionMeta != null) {
+            recentlyApprovedSenders[sessionMeta.senderUserId] = System.currentTimeMillis()
+        }
         val httpDeferred = pendingHttpDecisions.remove(transferId)
         if (httpDeferred != null) {
             dbHelper.updateIncomingRequestStatus(transferId, "ACCEPTED")
@@ -2931,15 +2993,16 @@ class MainActivity : FlutterActivity() {
             )
         }
 
-        for (fileMap in filesList) {
+        for ((fileIdx, fileMap) in filesList.withIndex()) {
             if (transferSession.isCancelled.get()) return false
 
             val uriStr = fileMap["uri"] as? String ?: continue
             val fileName = fileMap["name"] as? String ?: "file"
             val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+            val fileTransferId = if (filesList.size == 1) transferId else "${transferId}_${fileIdx + 1}"
 
             sendEvent("dataChannelState", mapOf(
-                "transferId" to transferId,
+                "transferId" to fileTransferId,
                 "state" to "DATA_CHANNEL_CONNECTING"
             ))
 
@@ -2954,12 +3017,12 @@ class MainActivity : FlutterActivity() {
 
             val senderEph = AuraAeadCrypto.generateEphemeralKeyPair()
             val senderSec1 = AuraAeadCrypto.exportSec1PublicKey(senderEph.public as ECPublicKey)
-            val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$transferId:$deviceId:${senderSec1.toHex()}".toByteArray(Charsets.UTF_8)
+            val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$fileTransferId:$deviceId:${senderSec1.toHex()}".toByteArray(Charsets.UTF_8)
             val senderSig = AuraIdentityManager.sign(senderTranscript)
 
             val prepPayload = JSONObject().apply {
-                put("transferId", transferId)
-                put("fileId", transferId)
+                put("transferId", fileTransferId)
+                put("fileId", fileTransferId)
                 put("fileName", fileName)
                 put("fileSize", fileSize)
                 put("sha256", "")
@@ -2976,6 +3039,8 @@ class MainActivity : FlutterActivity() {
             }
 
             if (prepConn.responseCode !in 200..299) {
+                val errText = try { prepConn.errorStream?.bufferedReader()?.readText() } catch (_: Exception) { "" }
+                Log.e(TAG, "Prepare-upload failed: HTTP ${prepConn.responseCode} - $errText")
                 prepConn.disconnect()
                 return false
             }
@@ -2991,7 +3056,7 @@ class MainActivity : FlutterActivity() {
             if (encryptionMode != "aead-aes256-gcm") {
                 Log.e(TAG, "Recipient rejected authenticated encryption. Plaintext transfer is forbidden.")
                 sendEvent("transferError", mapOf(
-                    "transferId" to transferId,
+                    "transferId" to fileTransferId,
                     "error" to "Recipient rejected authenticated encryption. Plaintext transfer is forbidden."
                 ))
                 return false
@@ -3005,14 +3070,14 @@ class MainActivity : FlutterActivity() {
             if (receiverEphHex.isEmpty() || receiverIdentityPubKey.isEmpty() || receiverSignature.isEmpty()) {
                 Log.e(TAG, "Recipient omitted required cryptographic credentials")
                 sendEvent("transferError", mapOf(
-                    "transferId" to transferId,
+                    "transferId" to fileTransferId,
                     "error" to "Recipient omitted required cryptographic credentials. Plaintext transfer is forbidden."
                 ))
                 return false
             }
 
             // Verify receiver signature over receiver transcript and validate against Trust Store
-            val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$transferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
+            val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$fileTransferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
             val isFirstContact = AuraIdentityManager.verifyPeerHandshake(
                 applicationContext,
                 receiverId,
@@ -3023,7 +3088,7 @@ class MainActivity : FlutterActivity() {
             if (isFirstContact == null) {
                 Log.e(TAG, "Cryptographic receiver authentication failed!")
                 sendEvent("transferError", mapOf(
-                    "transferId" to transferId,
+                    "transferId" to fileTransferId,
                     "error" to "Cryptographic receiver authentication failed! MitM or identity spoofing detected."
                 ))
                 return false
@@ -3039,7 +3104,7 @@ class MainActivity : FlutterActivity() {
             }
             val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
                 sharedSecret,
-                transferId,
+                fileTransferId,
                 token,
                 deviceId,
                 receiverId,
@@ -3048,7 +3113,7 @@ class MainActivity : FlutterActivity() {
             )
 
             sendEvent("dataChannelState", mapOf(
-                "transferId" to transferId,
+                "transferId" to fileTransferId,
                 "state" to "READY_TO_TRANSFER"
             ))
 
@@ -3062,7 +3127,7 @@ class MainActivity : FlutterActivity() {
                 setChunkedStreamingMode(512 * 1024)
                 setRequestProperty("Authorization", "Bearer $token")
                 setRequestProperty("x-token", token)
-                setRequestProperty("x-transfer-id", transferId)
+                setRequestProperty("x-transfer-id", fileTransferId)
                 setRequestProperty("x-sender-id", deviceId)
                 setRequestProperty("x-file-name", fileName)
                 setRequestProperty("x-file-size", fileSize.toString())
@@ -3070,11 +3135,14 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
-            activeHttpConnections[transferId] = uploadConn
+            activeHttpConnections[fileTransferId] = uploadConn
 
             startForegroundTransferService("Sending $fileName...", 0)
             val startTime = System.currentTimeMillis()
             var lastProgressTime = 0L
+            var lastSpeedTime = startTime
+            var lastSpeedBytes = 0L
+            var smoothedSpeed = 0.0
             var sentBytes = 0L
             val buf = ByteArray(512 * 1024)
 
@@ -3097,7 +3165,7 @@ class MainActivity : FlutterActivity() {
                             if (r == -1) break
 
                             val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
-                            val aad = "$transferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                            val aad = "$fileTransferId:$chunkIndex".toByteArray(Charsets.UTF_8)
                             val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
                             chunkIndex++
 
@@ -3109,13 +3177,24 @@ class MainActivity : FlutterActivity() {
                             val now = System.currentTimeMillis()
                             if (now - lastProgressTime >= PROGRESS_EVENT_INTERVAL_MS || sentBytes == fileSize) {
                                 lastProgressTime = now
-                                val elapsedSec = Math.max(0.001, (now - startTime) / 1000.0)
-                                val speed = (sentBytes / elapsedSec).toLong()
+                                val timeDeltaSec = Math.max(0.001, (now - lastSpeedTime) / 1000.0)
+                                if (timeDeltaSec >= 0.15 || sentBytes == fileSize) {
+                                    val bytesDelta = sentBytes - lastSpeedBytes
+                                    val currentSampleSpeed = bytesDelta / timeDeltaSec
+                                    smoothedSpeed = if (smoothedSpeed == 0.0) {
+                                        currentSampleSpeed
+                                    } else {
+                                        0.35 * currentSampleSpeed + 0.65 * smoothedSpeed
+                                    }
+                                    lastSpeedTime = now
+                                    lastSpeedBytes = sentBytes
+                                }
+                                val speed = smoothedSpeed.toLong().coerceAtLeast(0L)
                                 val pct = if (fileSize > 0) ((sentBytes.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
                                 val eta = if (speed > 0) ((fileSize - sentBytes) / speed).toInt() else 0
 
                                 sendEvent("transferProgress", mapOf(
-                                    "transferId" to transferId,
+                                    "transferId" to fileTransferId,
                                     "state" to "TRANSFERRING",
                                     "fileName" to fileName,
                                     "totalBytes" to fileSize,
@@ -3133,13 +3212,13 @@ class MainActivity : FlutterActivity() {
                     }
                 }
             } finally {
-                activeHttpConnections.remove(transferId)
+                activeHttpConnections.remove(fileTransferId)
             }
 
             if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
                 stopForegroundTransferService()
                 AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
-                sendEvent("transferCancelled", mapOf("transferId" to transferId))
+                sendEvent("transferCancelled", mapOf("transferId" to fileTransferId))
                 return false
             }
 
@@ -3156,7 +3235,7 @@ class MainActivity : FlutterActivity() {
                 val avgSpeed = (sentBytes / elapsedTotalSec).toLong()
 
                 dbHelper.insertTransfer(mapOf(
-                    "id" to transferId,
+                    "id" to fileTransferId,
                     "direction" to "sent",
                     "senderName" to senderDisplayName,
                     "receiverName" to targetIp,
@@ -3170,12 +3249,14 @@ class MainActivity : FlutterActivity() {
                     "createdAt" to System.currentTimeMillis()
                 ))
 
-                sendEvent("transferComplete", mapOf(
-                    "transferId" to transferId,
+                val completeMap = mapOf(
+                    "transferId" to fileTransferId,
                     "fileName" to fileName,
                     "fileSize" to sentBytes,
                     "verified" to true
-                ))
+                )
+                sendEvent("transferComplete", completeMap)
+                sendEvent("transferCompleted", completeMap)
             } else {
                 return false
             }
@@ -3793,6 +3874,91 @@ class MainActivity : FlutterActivity() {
             counter++
         }
         return target
+    }
+
+    private fun getMimeType(fileName: String): String {
+        val ext = fileName.substringAfterLast('.', "").lowercase()
+        return MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: when (ext) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "webp" -> "image/webp"
+            "heic" -> "image/heic"
+            "gif" -> "image/gif"
+            "bmp" -> "image/bmp"
+            "mp4" -> "video/mp4"
+            "mov" -> "video/quicktime"
+            "mkv" -> "video/x-matroska"
+            "avi" -> "video/x-msvideo"
+            "3gp" -> "video/3gpp"
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "wav" -> "audio/x-wav"
+            "flac" -> "audio/flac"
+            "aac" -> "audio/aac"
+            "pdf" -> "application/pdf"
+            "txt" -> "text/plain"
+            "zip" -> "application/zip"
+            else -> "application/octet-stream"
+        }
+    }
+
+    private fun registerAndExportToMediaStore(file: File) {
+        val name = file.name
+        val lower = name.lowercase()
+        val isImage = lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png") ||
+                      lower.endsWith(".webp") || lower.endsWith(".heic") || lower.endsWith(".gif") || lower.endsWith(".bmp")
+        val isVideo = lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".mkv") || lower.endsWith(".avi") || lower.endsWith(".3gp")
+        val isAudio = lower.endsWith(".mp3") || lower.endsWith(".m4a") || lower.endsWith(".wav") || lower.endsWith(".flac") || lower.endsWith(".aac")
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val contentValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, getMimeType(name))
+                    when {
+                        isImage -> put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/AuraDrop")
+                        isVideo -> put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/AuraDrop")
+                        isAudio -> put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/AuraDrop")
+                        else -> put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/AuraDrop")
+                    }
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+
+                val targetUri = when {
+                    isImage -> MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                    isVideo -> MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                    isAudio -> MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                    else -> MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                }
+
+                val uri = applicationContext.contentResolver.insert(targetUri, contentValues)
+                if (uri != null) {
+                    applicationContext.contentResolver.openOutputStream(uri)?.use { out ->
+                        file.inputStream().use { inp ->
+                            inp.copyTo(out)
+                        }
+                    }
+                    contentValues.clear()
+                    contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    applicationContext.contentResolver.update(uri, contentValues, null, null)
+                    Log.i(TAG, "Successfully exported $name to MediaStore URI: $uri")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error exporting $name to MediaStore: ${e.message}")
+        }
+
+        try {
+            MediaScannerConnection.scanFile(
+                applicationContext,
+                arrayOf(file.absolutePath),
+                arrayOf(getMimeType(name))
+            ) { path, uri ->
+                Log.i(TAG, "MediaScanner scanned $path -> $uri")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "MediaScanner error: ${e.message}")
+        }
     }
 
     private fun generateSasCode(idA: String, idB: String): String {
