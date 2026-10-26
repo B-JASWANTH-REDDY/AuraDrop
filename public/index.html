@@ -3,23 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="AuraDrop — High-speed, secure local file sharing between Android, Windows, and Web. Move faster, go further, and transfer at full LAN speed with zero cloud relay.">
+  <meta name="description" content="AuraDrop — High-speed, secure local peer-to-peer file sharing between Android, Windows, and Web. Move faster, go further, and transfer at full LAN speed with zero cloud relay.">
   <meta name="theme-color" content="#000000">
-  <title>AuraDrop — Share anything with AuraDrop</title>
+  <title>AuraDrop — High-Speed Local Peer-to-Peer File Sharing</title>
 
   <!-- Favicons -->
   <link rel="icon" href="/favicon.ico" sizes="any">
   <link rel="icon" href="/favicon.png" type="image/png">
 
   <!-- OpenGraph -->
-  <meta property="og:title" content="AuraDrop — Share anything with AuraDrop">
-  <meta property="og:description" content="Move faster, go further, and transfer at full LAN speed with zero cloud relay.">
+  <meta property="og:title" content="AuraDrop — High-Speed Local Peer-to-Peer File Sharing">
+  <meta property="og:description" content="Move faster, go further, and transfer at full LAN speed with zero cloud relay. Cross-platform P2P sharing between Android, Windows, and Web.">
   <meta property="og:type" content="website">
 
   <!-- Google Fonts: Inter -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 
   <style>
     *, *::before, *::after {
@@ -30,8 +30,8 @@
 
     :root {
       --bg: #000000;
-      --surface: #0a0a0c;
-      --surface-card: #0e0e12;
+      --surface: #08080b;
+      --surface-elevated: #0f0f15;
       --surface-border: rgba(255, 255, 255, 0.08);
       --surface-border-hover: rgba(255, 255, 255, 0.22);
       --fg: #ffffff;
@@ -39,10 +39,10 @@
       --fg-subtle: #48484a;
       --accent-indigo: #6366f1;
       --accent-purple: #8b5cf6;
-      --accent-blue: #3b82f6;
       --accent-cyan: #38bdf8;
       --green: #34c759;
       --font: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
       --transition: 0.22s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
@@ -69,9 +69,9 @@
       color: #000000;
     }
 
-    ::-webkit-scrollbar { width: 5px; }
+    ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: var(--bg); }
-    ::-webkit-scrollbar-thumb { background: #222226; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb { background: #222228; border-radius: 4px; }
 
     .container {
       max-width: 1220px;
@@ -89,7 +89,7 @@
       top: 0;
       z-index: 1000;
       width: 100%;
-      background: rgba(0, 0, 0, 0.75);
+      background: rgba(0, 0, 0, 0.8);
       backdrop-filter: blur(24px);
       -webkit-backdrop-filter: blur(24px);
       border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -107,14 +107,16 @@
       align-items: center;
       gap: 12px;
       text-decoration: none;
-      color: var(--fg);
+      color: #ffffff;
+      transition: opacity var(--transition);
     }
 
+    .brand-link:hover { opacity: 0.9; }
+
     .brand-title {
-      font-size: 19px;
+      font-size: 18px;
       font-weight: 800;
-      letter-spacing: -0.035em;
-      color: var(--fg);
+      letter-spacing: -0.03em;
     }
 
     .nav-center-links {
@@ -138,20 +140,20 @@
     .nav-right-actions {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 14px;
     }
 
     .btn-github-pill {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       padding: 8px 16px;
       border-radius: 9999px;
       background: rgba(255, 255, 255, 0.06);
       border: 1px solid rgba(255, 255, 255, 0.14);
       color: #ffffff;
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
       text-decoration: none;
       transition: all var(--transition);
     }
@@ -162,7 +164,7 @@
       transform: translateY(-1px);
     }
 
-    .btn-launch-pill {
+    .btn-cta-pill {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -177,9 +179,10 @@
       transition: all var(--transition);
     }
 
-    .btn-launch-pill:hover {
-      opacity: 0.94;
+    .btn-cta-pill:hover {
+      opacity: 0.92;
       transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(255, 255, 255, 0.25);
     }
 
     /* Hero Atmosphere */
@@ -317,7 +320,7 @@
       transform: translateY(-1px);
     }
 
-    /* Window Frame */
+    /* Window Demo Frame (Purely Visual Demo Preview, Not Clickable Web App) */
     .preview-container {
       max-width: 980px;
       margin: 0 auto 70px;
@@ -394,6 +397,22 @@
       50% { opacity: 0.35; transform: scale(0.85); }
     }
 
+    .globe-canvas-wrap {
+      width: 220px;
+      height: 220px;
+      margin-bottom: 24px;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .globe-canvas {
+      width: 220px;
+      height: 220px;
+      display: block;
+    }
+
     .preview-nodes-grid {
       display: flex;
       gap: 14px;
@@ -415,6 +434,11 @@
       flex: 1 1 200px;
       box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
       text-align: left;
+    }
+
+    .node-card.active-node {
+      background: rgba(99, 102, 241, 0.12);
+      border-color: rgba(99, 102, 241, 0.45);
     }
 
     .stream-box {
@@ -442,7 +466,7 @@
       border-radius: 9999px;
     }
 
-    /* Explanatory Sections */
+    /* Explanatory Content Sections */
     section.content-section {
       padding: 96px 0;
       border-top: 1px solid rgba(255, 255, 255, 0.07);
@@ -484,16 +508,17 @@
     .feature-card {
       background: var(--surface);
       border: 1px solid var(--surface-border);
-      border-radius: 18px;
-      padding: 34px 28px;
+      border-radius: 20px;
+      padding: 34px 30px;
       text-align: left;
       transition: all var(--transition);
     }
 
     .feature-card:hover {
-      border-color: var(--surface-border-hover);
+      border-color: rgba(255, 255, 255, 0.24);
       transform: translateY(-2px);
-      background: #0d0d10;
+      background: #0d0d12;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.8), 0 0 40px rgba(99, 102, 241, 0.08);
     }
 
     .feature-card-num {
@@ -516,29 +541,67 @@
       line-height: 1.65;
     }
 
-    /* Downloads Grid */
-    .downloads-grid {
+    /* Senior Developer Downloads Grid */
+    .dl-grid-pro {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 28px;
     }
 
-    .download-card {
-      background: var(--surface);
-      border: 1px solid var(--surface-border);
-      border-radius: 20px;
-      padding: 34px;
+    .dl-card-pro {
+      background: linear-gradient(180deg, rgba(16, 16, 22, 0.95) 0%, rgba(10, 10, 14, 0.95) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 22px;
+      padding: 36px 32px;
       text-align: left;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
+      position: relative;
+      overflow: hidden;
+      transition: all var(--transition);
+    }
+
+    .dl-card-pro:hover {
+      border-color: rgba(255, 255, 255, 0.26);
+      transform: translateY(-2px);
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.9), 0 0 50px rgba(99, 102, 241, 0.12);
+    }
+
+    .dl-badge-stable {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: rgba(52, 199, 89, 0.12);
+      color: #34c759;
+      border: 1px solid rgba(52, 199, 89, 0.25);
+    }
+
+    .dl-badge-roadmap {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      background: rgba(255, 159, 10, 0.12);
+      color: #ff9f0a;
+      border: 1px solid rgba(255, 159, 10, 0.25);
+    }
+
+    .tech-tag {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.7);
+      background: rgba(255, 255, 255, 0.05);
+      padding: 4px 10px;
+      border-radius: 6px;
     }
 
     .dl-btn-primary {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 13px 20px;
+      padding: 14px 22px;
       border-radius: 12px;
       background: #ffffff;
       color: #000000;
@@ -548,7 +611,11 @@
       transition: all var(--transition);
     }
 
-    .dl-btn-primary:hover { opacity: 0.92; transform: translateY(-1px); }
+    .dl-btn-primary:hover {
+      opacity: 0.92;
+      transform: translateY(-1px);
+      box-shadow: 0 8px 24px rgba(255, 255, 255, 0.2);
+    }
 
     .dl-btn-secondary {
       display: flex;
@@ -556,8 +623,8 @@
       justify-content: space-between;
       padding: 12px 16px;
       border-radius: 12px;
-      background: #121216;
-      border: 1px solid var(--surface-border);
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
       color: #ffffff;
       text-decoration: none;
       font-size: 13px;
@@ -565,7 +632,73 @@
       transition: all var(--transition);
     }
 
-    .dl-btn-secondary:hover { background: #1c1c22; }
+    .dl-btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.22);
+      transform: translateY(-1px);
+    }
+
+    /* Buy Me a Coffee Section */
+    .support-card {
+      background: #0a0a0e;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      padding: 36px 30px;
+      box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8), 0 0 50px rgba(99, 102, 241, 0.08);
+      max-width: 680px;
+      margin: 0 auto;
+    }
+
+    .qr-container {
+      display: inline-block;
+      padding: 16px;
+      border-radius: 18px;
+      background: #121216;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      margin-bottom: 22px;
+    }
+
+    .upi-pill-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #14141a;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      padding: 12px 20px;
+      max-width: 440px;
+      margin: 0 auto 24px auto;
+    }
+
+    .copy-btn {
+      background: #ffffff;
+      color: #000000;
+      border: none;
+      border-radius: 10px;
+      padding: 8px 16px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all var(--transition);
+    }
+
+    .copy-btn.copied {
+      background: #34c759;
+      color: #ffffff;
+    }
+
+    .coffee-tier-card {
+      padding: 14px 20px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      min-width: 130px;
+      transition: transform var(--transition);
+    }
+
+    .coffee-tier-card:hover {
+      transform: translateY(-2px);
+    }
 
     /* Footer */
     footer.site-footer {
@@ -603,6 +736,7 @@
       .footer-content { flex-direction: column; }
       .footer-links-group { flex-direction: column; gap: 16px; }
       .hero-section { padding: 60px 0 40px; }
+      .dl-grid-pro { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -616,7 +750,7 @@
       <nav class="nav-inner" aria-label="Main Navigation">
         <!-- Brand -->
         <a href="/" class="brand-link cursor-pointer" aria-label="AuraDrop Home">
-          <img src="/logo.png" alt="AuraDrop" width="30" height="30" style="border-radius: 8px; object-fit: contain;">
+          <img src="/logo.png" alt="AuraDrop" width="28" height="28" style="border-radius: 7px; object-fit: contain;">
           <span class="brand-title">AuraDrop</span>
         </a>
 
@@ -625,12 +759,12 @@
           <li><a href="#about" class="cursor-pointer">About</a></li>
           <li><a href="#features" class="cursor-pointer">Features</a></li>
           <li><a href="#protocol" class="cursor-pointer">Protocol</a></li>
-          <li><a href="#dynamic-island" class="cursor-pointer">Dynamic Island</a></li>
-          <li><a href="#security" class="cursor-pointer">Security</a></li>
+          <li><a href="#architecture" class="cursor-pointer">Architecture</a></li>
           <li><a href="#downloads" class="cursor-pointer">Downloads</a></li>
+          <li><a href="#support" class="cursor-pointer">Support</a></li>
         </ul>
 
-        <!-- Right Action Buttons -->
+        <!-- Right Action Buttons (No Launch Web App, Only Authentic Actions) -->
         <div class="nav-right-actions">
           <a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" rel="noopener noreferrer" class="btn-github-pill cursor-pointer">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
@@ -638,8 +772,8 @@
             </svg>
             <span>GitHub</span>
           </a>
-          <a href="/app" class="btn-launch-pill cursor-pointer">
-            Launch Web App
+          <a href="#downloads" class="btn-cta-pill cursor-pointer">
+            Get AuraDrop
           </a>
         </div>
       </nav>
@@ -647,14 +781,20 @@
   </header>
 
   <!-- ══════════════════════════════════════════════════════════════════════════
-       HERO SECTION (Pure AuraDrop Atmosphere)
+       HERO SECTION (High Contrast Squircle Logo & True AuraDrop Messaging)
   ══════════════════════════════════════════════════════════════════════════ -->
   <section class="hero-section" id="about">
     <div class="container">
 
-      <!-- Official AuraDrop Badge -->
+      <!-- Official White Squircle Badge with Razor-Sharp Black AuraDrop Logo -->
       <div class="hero-squircle cursor-pointer" aria-hidden="true">
-        <img src="/logo.png" alt="AuraDrop Logo" width="52" height="52" style="object-fit: contain;">
+        <img
+          src="/logo.png"
+          alt="AuraDrop Logo"
+          width="50"
+          height="50"
+          style="object-fit: contain; filter: brightness(0);"
+        >
       </div>
 
       <!-- Main Headline -->
@@ -667,20 +807,23 @@
         Move faster, go further, and transfer at full LAN speed with zero cloud relay. Cross-platform peer-to-peer file sharing between Android, Windows, and Web.
       </p>
 
-      <!-- Central Hero CTA Buttons -->
+      <!-- Central Hero CTAs (Windows Installer & Android Direct APK) -->
       <div class="hero-cta-group">
         <a href="/downloads/AuraDrop-Setup.exe" class="hero-btn-primary cursor-pointer" download="AuraDrop-Setup.exe">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
             <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/>
           </svg>
-          Download for Windows
+          <span>Download for Windows</span>
         </a>
-        <a href="/app" class="hero-btn-secondary cursor-pointer">
-          Try Web App in Browser ↗
+        <a href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk" target="_blank" rel="noopener noreferrer" class="hero-btn-secondary cursor-pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/>
+          </svg>
+          <span>Download Android APK</span>
         </a>
       </div>
 
-      <!-- Real Cross-Platform Ecosystem -->
+      <!-- Real Cross-Platform Ecosystem Strip -->
       <div class="platform-strip">
         <div class="platform-label">Supported Cross-Platform Ecosystem</div>
         <div class="platform-logos">
@@ -698,7 +841,7 @@
           </div>
           <div class="platform-item cursor-pointer">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-            <span>Web (Zero-Install)</span>
+            <span>Web P2P</span>
           </div>
           <div class="platform-item cursor-pointer">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12.003 2c-2.22 0-3.99 1.77-3.99 3.99 0 .42.06.82.18 1.2-1.39.46-2.4 1.76-2.4 3.31 0 1.34.76 2.5 1.86 3.07-.09.34-.15.7-.15 1.08 0 2.65 2.01 4.8 4.5 4.8s4.5-2.15 4.5-4.8c0-.38-.06-.74-.15-1.08 1.1-.57 1.86-1.73 1.86-3.07 0-1.55-1.01-2.85-2.4-3.31.12-.38.18-.78.18-1.2 0-2.22-1.77-3.99-3.99-3.99z"/></svg>
@@ -707,7 +850,7 @@
         </div>
       </div>
 
-      <!-- Framed Desktop Mockup -->
+      <!-- Framed Desktop Mockup (Embedded Visual Demonstration, Not Launchable) -->
       <div class="preview-container">
         <div class="window-frame">
           <div class="window-titlebar">
@@ -716,7 +859,7 @@
               <div class="traffic-dot traffic-yellow"></div>
               <div class="traffic-dot traffic-green"></div>
             </div>
-            <span class="window-title">AuraDrop Desktop · Dynamic Island &amp; Proximity Radar</span>
+            <span class="window-title">AuraDrop Desktop · Dynamic Island &amp; Proximity Radar Demo</span>
             <div style="display: flex; gap: 12px; color: rgba(255,255,255,0.4); font-size: 13px;">
               <span>🔍</span>
               <span>⧉</span>
@@ -731,13 +874,19 @@
               <span style="font-size: 11px; color: #8e8e93; border-left: 1px solid rgba(255,255,255,0.18); padding-left: 10px;">67.7 MB/s</span>
             </div>
 
-            <!-- Nodes Grid -->
+            <!-- Rotating Radar Sphere Demo Canvas -->
+            <div class="globe-canvas-wrap">
+              <canvas id="hero-globe-canvas" class="globe-canvas" width="220" height="220"></canvas>
+            </div>
+            <div style="font-size: 11px; color: #636366; margin-bottom: 22px;">Drag sphere to rotate · Proximity radar tracking active</div>
+
+            <!-- Connected Nodes Grid -->
             <div class="preview-nodes-grid">
-              <div class="node-card">
+              <div class="node-card active-node">
                 <div style="font-size: 20px;">📱</div>
                 <div>
                   <div style="font-size: 14px; font-weight: 700; color: #ffffff;">Pixel 9 Pro</div>
-                  <div style="font-size: 11px; color: #8e8e93;">Android 15 · Ready to transfer</div>
+                  <div style="font-size: 11px; color: #34c759;">Android 15 · Ready to transfer</div>
                 </div>
               </div>
               <div class="node-card">
@@ -756,7 +905,7 @@
               </div>
             </div>
 
-            <!-- Active Stream Box -->
+            <!-- Live Streaming Box Demo -->
             <div class="stream-box">
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span style="font-size: 13px; font-weight: 700; color: #ffffff;">4K_Cinematic_Broll.mov</span>
@@ -795,9 +944,9 @@
           <p class="feature-card-desc">Direct TCP and HTTP chunked streams transfer raw bytes at the physical throughput limit of your local router without uploading to any external server.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-card-num">02 / UI</div>
-          <h3 class="feature-card-title">Desktop &amp; Mobile Dynamic Island</h3>
-          <p class="feature-card-desc">A native floating pill for Windows desktop mirroring Android’s dynamic island. Track live transfer speeds, ETAs, and connected peers unobtrusively.</p>
+          <div class="feature-card-num">02 / ZERO-CONFIG</div>
+          <h3 class="feature-card-title">Seamless Auto-Discovery</h3>
+          <p class="feature-card-desc">UDP Multicast announcements detect phones and PCs on the same Wi-Fi instantly. No Bluetooth pairing pins, no login credentials, and no setup friction.</p>
         </div>
         <div class="feature-card">
           <div class="feature-card-num">03 / SECURITY</div>
@@ -811,8 +960,8 @@
         </div>
         <div class="feature-card">
           <div class="feature-card-num">05 / PRIVACY</div>
-          <h3 class="feature-card-title">Zero-Cloud Local First</h3>
-          <p class="feature-card-desc">Devices on the same network discover each other via UDP multicast announcements. No account, no signup, and zero internet upload required.</p>
+          <h3 class="feature-card-title">Zero Cloud Staging</h3>
+          <p class="feature-card-desc">Files stream device-to-device directly over LAN sockets. Signaling relays negotiate WebRTC handshakes only and never touch raw file bytes.</p>
         </div>
         <div class="feature-card">
           <div class="feature-card-num">06 / MESSAGING</div>
@@ -836,12 +985,12 @@
         <div style="background: #070709; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px 24px; text-align: left;">
           <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-bottom: 18px;">1</div>
           <h4 style="font-size: 17px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">LAN Discovery</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Devices announce presence via UDP multicast and local WebSocket heartbeats. Peer IP addresses are resolved instantly.</p>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Devices announce presence via UDP multicast on port 53317. Peer IP addresses and capabilities are resolved instantly.</p>
         </div>
         <div style="background: #070709; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px 24px; text-align: left;">
           <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-bottom: 18px;">2</div>
           <h4 style="font-size: 17px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Token Handshake</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral key.</p>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral 60s key.</p>
         </div>
         <div style="background: #070709; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px 24px; text-align: left;">
           <div style="width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; margin-bottom: 18px;">3</div>
@@ -858,163 +1007,240 @@
   </section>
 
   <!-- ══════════════════════════════════════════════════════════════════════════
-       DYNAMIC ISLAND SECTION
+       APP ARCHITECTURE SECTION (Replaces single-feature island section)
   ══════════════════════════════════════════════════════════════════════════ -->
-  <section class="content-section" id="dynamic-island">
+  <section class="content-section" id="architecture">
     <div class="container">
-      <div class="section-eyebrow">Native Island Experience</div>
-      <h2 class="section-heading">Desktop &amp; Android Dynamic Island.</h2>
-      <p class="section-lead">Enjoy the frictionless convenience of Apple AirDrop with native floating pills on Windows desktop and Android notifications.</p>
+      <div class="section-eyebrow">System Architecture</div>
+      <h2 class="section-heading">Built for native platform excellence.</h2>
+      <p class="section-lead">AuraDrop is engineered with specialized native runtimes for Windows, Android, and Web, sharing a unified cryptographic protocol.</p>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 20px;">
-        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 26px; text-align: left;">
-          <div style="font-size: 22px; margin-bottom: 14px;">🪟</div>
-          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Windows Native Pill</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Floating status overlay at the top of your screen displaying real-time transfer progress, speed in MB/s, and quick actions.</p>
+        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: left;">
+          <div style="font-size: 22px; margin-bottom: 14px;">🦀</div>
+          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Tauri &amp; Rust Desktop Core</h4>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Ultra-lean 5.96 MB Windows installer with negligible RAM usage, native Windows Dynamic Island overlay, and local socket server.</p>
         </div>
-        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 26px; text-align: left;">
-          <div style="font-size: 22px; margin-bottom: 14px;">🤖</div>
-          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Android Live Island</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Foreground service notification pill with live progress, one-tap accept/decline, and automatic gallery integration.</p>
+        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: left;">
+          <div style="font-size: 22px; margin-bottom: 14px;">📱</div>
+          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Flutter &amp; Kotlin Android Engine</h4>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Optimized foreground service, dynamic notification pill, direct port 8080 HTTP server, and automatic gallery integration.</p>
         </div>
-        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 26px; text-align: left;">
-          <div style="font-size: 22px; margin-bottom: 14px;">⚡</div>
-          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Instant Peer Discovery</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Pulsing radar indicator updates dynamically as new Android phones, PCs, or browsers enter your local network.</p>
+        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: left;">
+          <div style="font-size: 22px; margin-bottom: 14px;">🌐</div>
+          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Universal Web P2P Engine</h4>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Peer-to-peer browser connectivity using WebRTC DataChannels with STUN/TURN traversal for cross-network file exchanges.</p>
         </div>
-        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 26px; text-align: left;">
+        <div style="background: #08080a; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 28px; text-align: left;">
           <div style="font-size: 22px; margin-bottom: 14px;">🛡️</div>
-          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">Checksum Verified</h4>
-          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Live green check appears the millisecond all bytes are verified against the SHA-256 manifest hash.</p>
+          <h4 style="font-size: 16px; font-weight: 700; color: #ffffff; margin-bottom: 8px;">17-Point Regression Suite</h4>
+          <p style="font-size: 13px; color: #8e8e93; line-height: 1.6;">Automated tests continuously auditing path traversal sanitization, device identity binding, and SHA-256 byte integrity.</p>
         </div>
       </div>
     </div>
   </section>
 
   <!-- ══════════════════════════════════════════════════════════════════════════
-       SECURITY SECTION
-  ══════════════════════════════════════════════════════════════════════════ -->
-  <section class="content-section" id="security">
-    <div class="container">
-      <div class="section-eyebrow">Security Manifesto</div>
-      <h2 class="section-heading">Verified on every byte.</h2>
-      <p class="section-lead">AuraDrop is built with zero-trust local boundaries and cryptographic verification across every phase.</p>
-
-      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px;">
-        <div class="feature-card">
-          <div class="feature-card-num">SEC / 01</div>
-          <h3 class="feature-card-title">Single-Use Tokens</h3>
-          <p class="feature-card-desc">One-time tokens expire in 60s and are invalidated upon stream initiation. Replayed tokens receive an immediate 403.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-card-num">SEC / 02</div>
-          <h3 class="feature-card-title">Zero Server Staging</h3>
-          <p class="feature-card-desc">Files stream device-to-device over LAN sockets. Signaling servers only negotiate handshakes and never touch raw payload bytes.</p>
-        </div>
-        <div class="feature-card">
-          <div class="feature-card-num">SEC / 03</div>
-          <h3 class="feature-card-title">SHA-256 Checksum</h3>
-          <p class="feature-card-desc">Streaming hashes computed incrementally. Exact byte count and SHA-256 checksum must match or file is quarantined.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ══════════════════════════════════════════════════════════════════════════
-       DOWNLOADS SECTION
+       UPGRADED SENIOR DEVELOPER DOWNLOADS SECTION
   ══════════════════════════════════════════════════════════════════════════ -->
   <section class="content-section" id="downloads">
     <div class="container">
-      <div class="section-eyebrow">Available Releases</div>
+      <div class="section-eyebrow">Production Releases</div>
       <h2 class="section-heading">Download AuraDrop v2.0.1</h2>
-      <p class="section-lead">Official production binaries. Signed installers for Windows, direct APK for Android, and instant zero-install browser sharing.</p>
+      <p class="section-lead">Official release binaries. Code signed for Windows, standalone APK for Android, and verified SHA-256 integrity checksums.</p>
 
-      <div class="downloads-grid">
+      <div class="dl-grid-pro">
         <!-- Windows Card -->
-        <div class="download-card">
+        <div class="dl-card-pro">
           <div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-              <div style="display: flex; gap: 14px; align-items: center;">
-                <span style="font-size: 28px;">🪟</span>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+              <div style="display: flex; gap: 16px; align-items: center;">
+                <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); display: flex; align-items: center; justify-content: center;">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+                </div>
                 <div>
-                  <div style="font-size: 20px; font-weight: 800; color: #ffffff;">Windows Desktop</div>
-                  <div style="font-size: 12px; color: #8e8e93;">v2.0.1 · Windows 10 / 11 (x64)</div>
+                  <div style="font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">Windows Desktop</div>
+                  <div style="font-size: 13px; color: #8e8e93; margin-top: 2px;">v2.0.1 · Windows 10 &amp; 11 (64-bit)</div>
                 </div>
               </div>
-              <span style="font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 9999px; background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.25);">Dynamic Island</span>
+              <span class="dl-badge-stable">Stable</span>
             </div>
-            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 26px;">
-              Tauri native application featuring the floating pill Dynamic Island, local LAN HTTP streaming server, and automatic device proximity detection.
+
+            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 24px;">
+              Tauri v2 native desktop application featuring native Windows Dynamic Island, local TCP chunk streaming, and zero-config peer discovery.
             </p>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px;">
+              <span class="tech-tag">x64 Arch</span>
+              <span class="tech-tag">Rust Engine</span>
+              <span class="tech-tag">SHA-256 Verified</span>
+            </div>
           </div>
+
           <div style="display: flex; flex-direction: column; gap: 10px;">
             <a href="/downloads/AuraDrop-Setup.exe" class="dl-btn-primary cursor-pointer" download="AuraDrop-Setup.exe">
-              <span>Download Installer (.exe)</span>
-              <span>5.96 MB</span>
+              <span style="display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Setup.exe
+              </span>
+              <span style="opacity: 0.7;">5.96 MB</span>
             </a>
             <div style="display: flex; gap: 10px;">
               <a href="/downloads/AuraDrop-Windows.msi" class="dl-btn-secondary cursor-pointer" style="flex: 1;" download="AuraDrop-Windows.msi">
-                <span>MSI</span>
-                <span>9.25 MB</span>
+                <span>MSI Package</span>
+                <span style="color: #8e8e93; font-size: 12px;">9.25 MB</span>
               </a>
               <a href="/downloads/AuraDrop-Windows.zip" class="dl-btn-secondary cursor-pointer" style="flex: 1;" download="AuraDrop-Windows.zip">
-                <span>ZIP</span>
-                <span>8.42 MB</span>
+                <span>Portable ZIP</span>
+                <span style="color: #8e8e93; font-size: 12px;">8.42 MB</span>
               </a>
             </div>
           </div>
         </div>
 
         <!-- Android Card -->
-        <div class="download-card">
+        <div class="dl-card-pro">
           <div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-              <div style="display: flex; gap: 14px; align-items: center;">
-                <span style="font-size: 28px;">🤖</span>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+              <div style="display: flex; gap: 16px; align-items: center;">
+                <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); display: flex; align-items: center; justify-content: center;">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/></svg>
+                </div>
                 <div>
-                  <div style="font-size: 20px; font-weight: 800; color: #ffffff;">Android Mobile</div>
-                  <div style="font-size: 12px; color: #8e8e93;">v2.0.1 · Android 8.0+ (ARM64)</div>
+                  <div style="font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">Android Mobile</div>
+                  <div style="font-size: 13px; color: #8e8e93; margin-top: 2px;">v2.0.1 · Android 8.0+ (ARM64)</div>
                 </div>
               </div>
-              <span style="font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 9999px; background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.25);">Dynamic Island</span>
+              <span class="dl-badge-stable">Stable</span>
             </div>
-            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 26px;">
-              Flutter app featuring native Android notification Dynamic Island, high-speed local HTTP socket server, SHA-256 integrity verification, and P2P messaging.
+
+            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 24px;">
+              Flutter &amp; Kotlin foreground service app with real-time notification dynamic island, MediaStore gallery exports, and embedded socket server.
             </p>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px;">
+              <span class="tech-tag">ARM64-v8a</span>
+              <span class="tech-tag">Scoped Storage</span>
+              <span class="tech-tag">Zero Battery Drain</span>
+            </div>
           </div>
+
           <div style="display: flex; flex-direction: column; gap: 10px;">
             <a href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk" target="_blank" rel="noopener noreferrer" class="dl-btn-primary cursor-pointer">
-              <span>Download Direct APK</span>
-              <span>113.7 MB</span>
+              <span style="display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download Direct APK
+              </span>
+              <span style="opacity: 0.7;">113.7 MB</span>
             </a>
             <a href="https://github.com/JACK-AI7/AuraDrop/releases" target="_blank" rel="noopener noreferrer" class="dl-btn-secondary cursor-pointer">
-              <span>View Releases on GitHub ↗</span>
-              <span>Notes</span>
+              <span>View GitHub Release Notes ↗</span>
+              <span style="color: #8e8e93; font-size: 12px;">Changelog</span>
             </a>
           </div>
         </div>
 
-        <!-- Web Browser Card -->
-        <div class="download-card">
+        <!-- Apple & Linux Ecosystem Card -->
+        <div class="dl-card-pro">
           <div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-              <div style="display: flex; gap: 14px; align-items: center;">
-                <span style="font-size: 28px;">🌐</span>
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+              <div style="display: flex; gap: 16px; align-items: center;">
+                <div style="width: 48px; height: 48px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.1); display: flex; align-items: center; justify-content: center;">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.61-.75 1.04-1.8 1.01-2.87-.96.04-2.06.66-2.7 1.45-.56.66-.99 1.72-.94 2.76 1.08.08 2.02-.59 2.63-1.34z"/></svg>
+                </div>
                 <div>
-                  <div style="font-size: 20px; font-weight: 800; color: #ffffff;">AuraDrop Web App</div>
-                  <div style="font-size: 12px; color: #8e8e93;">v2.0.1 · Chrome, Edge, Safari, Firefox</div>
+                  <div style="font-size: 22px; font-weight: 800; color: #ffffff; letter-spacing: -0.02em;">Apple &amp; Linux</div>
+                  <div style="font-size: 13px; color: #8e8e93; margin-top: 2px;">macOS, iOS, Ubuntu, Debian</div>
                 </div>
               </div>
-              <span style="font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 9999px; background: rgba(52, 199, 89, 0.12); color: #34c759; border: 1px solid rgba(52, 199, 89, 0.25);">Zero Install</span>
+              <span class="dl-badge-roadmap">Roadmap</span>
             </div>
-            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 26px;">
-              No download or installation required. Share files instantly across browsers using direct WebRTC DataChannels and local Wi-Fi device discovery.
+
+            <p style="font-size: 14px; color: #8e8e93; line-height: 1.6; margin-bottom: 24px;">
+              Native macOS Apple Silicon DMG and Linux AppImage packages are actively compiling. Safari and Chrome users can share instantly using WebRTC data planes.
             </p>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 28px;">
+              <span class="tech-tag">Apple Silicon</span>
+              <span class="tech-tag">AppImage</span>
+              <span class="tech-tag">MIT License</span>
+            </div>
           </div>
-          <a href="/app" class="dl-btn-primary cursor-pointer">
-            <span>Launch Web App in Browser ↗</span>
-            <span>Instant</span>
+
+          <a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" rel="noopener noreferrer" class="dl-btn-secondary cursor-pointer" style="padding: 14px 22px;">
+            <span>Track Progress on GitHub ↗</span>
+            <span style="color: #8e8e93; font-size: 12px;">Open Source</span>
           </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════
+       BUY ME A COFFEE / SUPPORT INDEPENDENT DEVELOPMENT
+  ══════════════════════════════════════════════════════════════════════════ -->
+  <section class="content-section" id="support" style="background: #050508;">
+    <div class="container" style="text-align: center;">
+      <div class="section-eyebrow">Support Independent Development</div>
+      <h2 class="section-heading" style="margin-bottom: 16px;">Buy Me a Coffee ☕</h2>
+      <p class="section-lead" style="margin: 0 auto 40px auto;">
+        AuraDrop is 100% free, private, and open source with zero advertisements, zero tracking, and zero cloud surveillance. If this tool saves you time, consider supporting future development directly.
+      </p>
+
+      <!-- Direct UPI Payment Card -->
+      <div class="support-card">
+        <!-- Real PhonePe QR Code -->
+        <div class="qr-container">
+          <img
+            src="/upi_qr.png"
+            alt="Union Bank Of India / PhonePe QR - B.JASWANTH REDDY"
+            width="180"
+            height="180"
+            style="border-radius: 12px; object-fit: contain; display: block; margin: 0 auto;"
+          >
+          <div style="margin-top: 10px;">
+            <p style="font-size: 12px; font-weight: 700; color: #ffffff;">Union Bank of India • PhonePe QR</p>
+            <p style="font-size: 11px; color: #8e8e93; margin-top: 2px;">Payee: B.JASWANTH REDDY</p>
+          </div>
+        </div>
+
+        <!-- Direct UPI ID Pill with One-Click Copy -->
+        <div class="upi-pill-bar">
+          <div style="text-align: left;">
+            <span style="font-size: 10px; text-transform: uppercase; font-weight: 700; color: #8e8e93; letter-spacing: 0.08em; display: block;">
+              Direct UPI ID
+            </span>
+            <span id="upi-id-display" style="font-size: 14px; font-weight: 700; color: #ffffff; font-family: monospace;">
+              9182769225@ybl
+            </span>
+          </div>
+          <button id="copy-upi-btn" class="copy-btn">
+            Copy UPI
+          </button>
+        </div>
+
+        <div style="display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: #8e8e93; margin-bottom: 28px;">
+          <div style="width: 6px; height: 6px; border-radius: 50%; background: #34c759;"></div>
+          <span>Scan with PhonePe, Google Pay, Paytm, or BHIM UPI</span>
+        </div>
+
+        <!-- Coffee Tiers -->
+        <div style="display: flex; justify-content: center; gap: 14px; flex-wrap: wrap;">
+          <div class="coffee-tier-card">
+            <div style="font-size: 20px; margin-bottom: 4px;">☕</div>
+            <div style="font-size: 13px; font-weight: 700; color: #ffffff;">1 Coffee</div>
+            <div style="font-size: 11px; color: #8e8e93; margin-top: 2px;">₹50 / $1</div>
+          </div>
+          <div class="coffee-tier-card">
+            <div style="font-size: 20px; margin-bottom: 4px;">☕☕☕</div>
+            <div style="font-size: 13px; font-weight: 700; color: #ffffff;">3 Coffees</div>
+            <div style="font-size: 11px; color: #8e8e93; margin-top: 2px;">₹150 / $2</div>
+          </div>
+          <div class="coffee-tier-card" style="background: rgba(99, 102, 241, 0.08); border-color: rgba(99, 102, 241, 0.3);">
+            <div style="font-size: 20px; margin-bottom: 4px;">⭐</div>
+            <div style="font-size: 13px; font-weight: 700; color: #ffffff;">Supporter</div>
+            <div style="font-size: 11px; color: #38bdf8; margin-top: 2px;">₹500 / $6</div>
+          </div>
         </div>
       </div>
     </div>
@@ -1029,7 +1255,7 @@
         <div style="max-width: 340px; text-align: left;">
           <a href="/" class="cursor-pointer" style="display: flex; align-items: center; gap: 10px; text-decoration: none; color: #ffffff;">
             <img src="/logo.png" alt="AuraDrop" width="24" height="24" style="border-radius: 6px; object-fit: contain;">
-            <span style="font-size: 17px; fontWeight: 800;">AuraDrop</span>
+            <span style="font-size: 17px; font-weight: 800;">AuraDrop</span>
           </a>
           <p style="font-size: 13px; color: #8e8e93; margin-top: 12px; line-height: 1.6;">
             High-speed local peer-to-peer file sharing and messaging across Android, Windows, and Web.
@@ -1045,11 +1271,152 @@
       </div>
 
       <div style="margin-top: 50px; padding-top: 24px; border-top: 1px solid rgba(255, 255, 255, 0.06); display: flex; justify-content: space-between; font-size: 12px; color: #48484a;">
-        <span>© 2026 AuraDrop. Open source under the MIT License.</span>
+        <span>© 2026 AuraDrop. Open source under the MIT License. Created by B. Jaswanth Reddy.</span>
         <span>Version 2.0.1</span>
       </div>
     </div>
   </footer>
 
+  <!-- Rotating Radar Sphere Demo Canvas Script & Copy UPI Interaction -->
+  <script>
+    // Copy UPI interaction
+    const copyBtn = document.getElementById('copy-upi-btn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText('9182769225@ybl');
+        copyBtn.textContent = 'Copied ✓';
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.textContent = 'Copy UPI';
+          copyBtn.classList.remove('copied');
+        }, 2500);
+      });
+    }
+
+    // 3D Point Sphere Visualization on Demo Preview Canvas
+    (function initGlobe() {
+      const canvas = document.getElementById('hero-globe-canvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const size = 220;
+      const radius = 88;
+      const numPoints = 280;
+      let rotY = 0;
+      let rotX = 0.2;
+      let isDragging = false;
+      let lastMouseX = 0;
+      let lastMouseY = 0;
+
+      // Fibonacci sphere distribution
+      const points = [];
+      const phi = Math.PI * (3 - Math.sqrt(5)); // Golden ratio angle
+
+      for (let i = 0; i < numPoints; i++) {
+        const y = 1 - (i / (numPoints - 1)) * 2; // y goes from 1 to -1
+        const rad = Math.sqrt(1 - y * y); // radius at y
+        const theta = phi * i;
+
+        const x = Math.cos(theta) * rad;
+        const z = Math.sin(theta) * rad;
+
+        points.push({ x: x * radius, y: y * radius, z: z * radius });
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, size, size);
+        const cx = size / 2;
+        const cy = size / 2;
+
+        if (!isDragging) {
+          rotY += 0.006;
+        }
+
+        const cosY = Math.cos(rotY);
+        const sinY = Math.sin(rotY);
+        const cosX = Math.cos(rotX);
+        const sinX = Math.sin(rotX);
+
+        // Sort by Z for realistic depth
+        const projected = points.map(pt => {
+          // Rotate around Y
+          let x1 = pt.x * cosY - pt.z * sinY;
+          let z1 = pt.z * cosY + pt.x * sinY;
+
+          // Rotate around X
+          let y1 = pt.y * cosX - z1 * sinX;
+          let z2 = z1 * cosX + pt.y * sinX;
+
+          return { x: x1, y: y1, z: z2 };
+        });
+
+        projected.sort((a, b) => a.z - b.z);
+
+        for (const p of projected) {
+          // Perspective scale
+          const fov = 300;
+          const scale = fov / (fov + p.z);
+          const px = cx + p.x * scale;
+          const py = cy + p.y * scale;
+
+          // Alpha fade for back vs front
+          const alpha = Math.max(0.08, Math.min(0.9, (p.z + radius) / (2 * radius) + 0.1));
+          const dotSize = Math.max(1, 2.4 * scale);
+
+          ctx.beginPath();
+          ctx.arc(px, py, dotSize, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${alpha.toFixed(2)})`;
+          ctx.fill();
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      canvas.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastMouseX;
+        const dy = e.clientY - lastMouseY;
+        rotY += dx * 0.01;
+        rotX += dy * 0.01;
+        lastMouseX = e.clientX;
+        lastMouseY = e.clientY;
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDragging = false;
+      });
+
+      canvas.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+          isDragging = true;
+          lastMouseX = e.touches[0].clientX;
+          lastMouseY = e.touches[0].clientY;
+        }
+      });
+
+      window.addEventListener('touchmove', (e) => {
+        if (!isDragging || e.touches.length !== 1) return;
+        const dx = e.touches[0].clientX - lastMouseX;
+        const dy = e.touches[0].clientY - lastMouseY;
+        rotY += dx * 0.01;
+        rotX += dy * 0.01;
+        lastMouseX = e.touches[0].clientX;
+        lastMouseY = e.touches[0].clientY;
+      });
+
+      window.addEventListener('touchend', () => {
+        isDragging = false;
+      });
+
+      render();
+    })();
+  </script>
 </body>
 </html>
