@@ -169,32 +169,32 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
     const userLon = 0.0;
     const userSpherical = latLonToVec3(userLat, userLon);
     const userRot = rotateX(rotateY(userSpherical, yaw), pitch);
+    const ux = center.x + userRot.x * radius;
+    const uy = center.y + userRot.y * radius;
+    const userPos = { x: ux, y: uy };
 
-    if (userRot.z > -0.2) {
-      const ux = center.x + userRot.x * radius;
-      const uy = center.y + userRot.y * radius;
+    const userAlpha = Math.max(0.25, Math.min(1.0, userRot.z + 0.7));
 
-      // Outer ring
-      ctx.beginPath();
-      ctx.arc(ux, uy, 6.5, 0, Math.PI * 2);
-      ctx.strokeStyle = '#FFFFFF';
-      ctx.lineWidth = 1.2;
-      ctx.stroke();
+    // Outer ring
+    ctx.beginPath();
+    ctx.arc(ux, uy, 7, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(255, 255, 255, ${userAlpha})`;
+    ctx.lineWidth = 1.6;
+    ctx.stroke();
 
-      // Inner dot
-      ctx.beginPath();
-      ctx.arc(ux, uy, 3.0, 0, Math.PI * 2);
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fill();
+    // Inner dot
+    ctx.beginPath();
+    ctx.arc(ux, uy, 3.2, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 255, 255, ${userAlpha})`;
+    ctx.fill();
 
-      // "YOU" Label
-      ctx.font = '700 9px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-      ctx.fillText('YOU', ux, uy + 16);
-    }
+    // "YOU" Label
+    ctx.font = '700 9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = `rgba(255, 255, 255, ${userAlpha * 0.9})`;
+    ctx.fillText('YOU', ux, uy + 17);
 
-    // 4. Discovered Peer Markers
+    // 4. Discovered Peer Markers & Real Connection Beams
     const angleStep = (2 * Math.PI) / Math.max(1, peers.length);
     peers.forEach((peer, i) => {
       const hash = peer.id.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
@@ -204,14 +204,64 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
       const peerVec = latLonToVec3(lat, lon);
       const peerRot = rotateX(rotateY(peerVec, yaw), pitch);
 
-      if (peerRot.z > -0.15) {
+      if (peerRot.z > -0.25) {
         const px = center.x + peerRot.x * radius;
         const py = center.y + peerRot.y * radius;
         const isSelected = selectedPeerId === peer.id;
 
         visiblePeerPositionsRef.current.set(peer.id, { x: px, y: py, peer });
 
-        // Orbital selection ring (Apple monochrome)
+        // REAL CONNECTING LINE BETWEEN YOU AND CONNECTED / SELECTED PEER
+        if (userPos && (isSelected || peer.connectionState === 'READY_TO_TRANSFER' || isTransferring)) {
+          ctx.save();
+          const ux = userPos.x;
+          const uy = userPos.y;
+          const mx = (ux + px) / 2;
+          const my = (uy + py) / 2 - 14;
+
+          // Glowing under-beam
+          ctx.beginPath();
+          ctx.moveTo(ux, uy);
+          ctx.quadraticCurveTo(mx, my, px, py);
+          ctx.strokeStyle = isTransferring
+            ? 'rgba(56, 189, 248, 0.4)'
+            : isConnected
+            ? 'rgba(52, 199, 89, 0.4)'
+            : 'rgba(99, 102, 241, 0.35)';
+          ctx.lineWidth = 4.5;
+          ctx.stroke();
+
+          // Core stream line with animated dash
+          ctx.beginPath();
+          ctx.moveTo(ux, uy);
+          ctx.quadraticCurveTo(mx, my, px, py);
+          ctx.strokeStyle = isTransferring
+            ? '#38bdf8'
+            : isConnected
+            ? '#34C759'
+            : '#818cf8';
+          ctx.lineWidth = 1.6;
+          ctx.setLineDash([5, 5]);
+          ctx.lineDashOffset = -performance.now() * 0.025;
+          ctx.stroke();
+
+          // Animated traveling energy pulses
+          const now = performance.now() * 0.0012;
+          const pulses = [now % 1, (now + 0.5) % 1];
+          for (const t of pulses) {
+            const qx = (1 - t) * (1 - t) * ux + 2 * (1 - t) * t * mx + t * t * px;
+            const qy = (1 - t) * (1 - t) * uy + 2 * (1 - t) * t * my + t * t * py;
+            ctx.beginPath();
+            ctx.arc(qx, qy, 3, 0, Math.PI * 2);
+            ctx.fillStyle = isTransferring ? '#38bdf8' : isConnected ? '#34C759' : '#FFFFFF';
+            ctx.shadowColor = ctx.fillStyle;
+            ctx.shadowBlur = 8;
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // Orbital selection ring
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(px, py, 11, 0, Math.PI * 2);
@@ -223,8 +273,8 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
           if (isTransferring) {
             ctx.beginPath();
             ctx.arc(px, py, 17, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.lineWidth = 1.0;
+            ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
+            ctx.lineWidth = 1.2;
             ctx.stroke();
           }
         }
@@ -239,12 +289,11 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
           : '#A1A1AA';
         ctx.fill();
 
-        // Peer name tag with platform distinction
+        // Peer name tag with clean typography (No cheap emoji)
         ctx.font = isSelected ? '700 11px -apple-system, sans-serif' : '600 10px -apple-system, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = isSelected ? '#FFFFFF' : 'rgba(220, 220, 225, 0.85)';
-        const displayLabel = peer.platform === 'android' ? `📱 ${peer.name}` : peer.name;
-        ctx.fillText(displayLabel, px, py + 18);
+        ctx.fillText(peer.name, px, py + 18);
       }
     });
   }, [yaw, pitch, peers, selectedPeerId, isTransferring, size]);

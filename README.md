@@ -1,7 +1,20 @@
-# ⚡ AuraDrop — Next-Gen Peer-to-Peer File Sharing
+<p align="center">
+  <img src="./public/logo.png" alt="AuraDrop Logo" width="100" height="100" style="border-radius: 22px; box-shadow: 0 8px 24px rgba(0,0,0,0.12);" />
+</p>
 
-> **"Select → Nearby device → Accept → Transfer → Done."**  
-> A production-grade cross-platform peer-to-peer file sharing application engineered for Android, iOS, Windows, macOS, and Linux with a completely original visual identity, custom networking stack, and zero cloud dependency for local transfers.
+<h1 align="center">AuraDrop</h1>
+
+<p align="center">
+  <strong>Next-Gen Cross-Platform Peer-to-Peer File Sharing Engine & Applications</strong><br>
+  <em>Move faster, go further, and transfer at full LAN speed with zero cloud relay.</em>
+</p>
+
+<p align="center">
+  <a href="https://github.com/JACK-AI7/AuraDrop/releases"><img src="https://img.shields.io/github/v/release/JACK-AI7/AuraDrop?color=6366f1&style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/JACK-AI7/AuraDrop/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License" /></a>
+  <img src="https://img.shields.io/badge/Platforms-Android%20%7C%20Windows%20%7C%20Web%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Platforms" />
+  <img src="https://img.shields.io/badge/Encryption-X25519%20%7C%20AES--256--GCM-success?style=flat-square" alt="Security" />
+</p>
 
 ---
 
