@@ -219,43 +219,35 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
           const mx = (ux + px) / 2;
           const my = (uy + py) / 2 - 14;
 
-          // Glowing under-beam
+          // Glowing under-beam (pure white glow)
           ctx.beginPath();
           ctx.moveTo(ux, uy);
           ctx.quadraticCurveTo(mx, my, px, py);
-          ctx.strokeStyle = isTransferring
-            ? 'rgba(56, 189, 248, 0.4)'
-            : isConnected
-            ? 'rgba(52, 199, 89, 0.4)'
-            : 'rgba(99, 102, 241, 0.35)';
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)';
           ctx.lineWidth = 4.5;
           ctx.stroke();
 
-          // Core stream line with animated dash
+          // Core stream line with animated dash (pure white)
           ctx.beginPath();
           ctx.moveTo(ux, uy);
           ctx.quadraticCurveTo(mx, my, px, py);
-          ctx.strokeStyle = isTransferring
-            ? '#38bdf8'
-            : isConnected
-            ? '#34C759'
-            : '#818cf8';
-          ctx.lineWidth = 1.6;
-          ctx.setLineDash([5, 5]);
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 1.8;
+          ctx.setLineDash([6, 5]);
           ctx.lineDashOffset = -performance.now() * 0.025;
           ctx.stroke();
 
-          // Animated traveling energy pulses
+          // Animated traveling energy pulses (pure white)
           const now = performance.now() * 0.0012;
           const pulses = [now % 1, (now + 0.5) % 1];
           for (const t of pulses) {
             const qx = (1 - t) * (1 - t) * ux + 2 * (1 - t) * t * mx + t * t * px;
             const qy = (1 - t) * (1 - t) * uy + 2 * (1 - t) * t * my + t * t * py;
             ctx.beginPath();
-            ctx.arc(qx, qy, 3, 0, Math.PI * 2);
-            ctx.fillStyle = isTransferring ? '#38bdf8' : isConnected ? '#34C759' : '#FFFFFF';
-            ctx.shadowColor = ctx.fillStyle;
-            ctx.shadowBlur = 8;
+            ctx.arc(qx, qy, 3.2, 0, Math.PI * 2);
+            ctx.fillStyle = '#FFFFFF';
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.95)';
+            ctx.shadowBlur = 10;
             ctx.fill();
           }
           ctx.restore();
