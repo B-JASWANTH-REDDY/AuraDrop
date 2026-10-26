@@ -114,7 +114,21 @@ const BorderGlow = ({
 
     card.style.setProperty('--edge-proximity', `${(edge * 100).toFixed(3)}`);
     card.style.setProperty('--cursor-angle', `${angle.toFixed(3)}deg`);
+
+    // Interactive 3D tilt & elevation response to cursor motion
+    const rotX = ((y - rect.height / 2) / (rect.height / 2)) * -5;
+    const rotY = ((x - rect.width / 2) / (rect.width / 2)) * 5;
+    card.style.transform = `perspective(1000px) rotateX(${rotX.toFixed(2)}deg) rotateY(${rotY.toFixed(2)}deg) translateY(-4px)`;
+    card.style.transition = 'transform 0.08s ease-out';
   }, [getEdgeProximity, getCursorAngle]);
+
+  const handlePointerLeave = useCallback(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    card.style.setProperty('--edge-proximity', '0');
+    card.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(0px)';
+    card.style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)';
+  }, []);
 
   useEffect(() => {
     if (!animated || !cardRef.current) return;
@@ -144,6 +158,7 @@ const BorderGlow = ({
     <div
       ref={cardRef}
       onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
       className={`border-glow-card${lightSurface ? ' border-glow-card--light' : ''} ${className}`}
       style={{
         '--card-bg': backgroundColor,
@@ -152,6 +167,8 @@ const BorderGlow = ({
         '--glow-padding': `${glowRadius}px`,
         '--cone-spread': coneSpread,
         '--fill-opacity': fillOpacity,
+        transformStyle: 'preserve-3d',
+        willChange: 'transform',
         ...glowVars,
         ...buildGradientVars(colors),
       }}

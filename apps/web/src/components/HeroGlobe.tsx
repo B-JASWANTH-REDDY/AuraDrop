@@ -265,7 +265,7 @@ export const HeroGlobe: React.FC<HeroGlobeProps> = ({
           if (isTransferring) {
             ctx.beginPath();
             ctx.arc(px, py, 17, 0, Math.PI * 2);
-            ctx.strokeStyle = 'rgba(56, 189, 248, 0.7)';
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
             ctx.lineWidth = 1.2;
             ctx.stroke();
           }

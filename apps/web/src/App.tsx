@@ -18,6 +18,52 @@ import BorderGlow from './components/reactbits/BorderGlow';
 import SlideCommit from './components/reactbits/SlideCommit';
 import AnimatedContent from './components/reactbits/AnimatedContent';
 
+// Interactive 3D Tilt Card that smoothly follows cursor movement
+const TiltCard: React.FC<{
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+  className?: string;
+  onClick?: () => void;
+}> = ({ children, style, className = '', onClick }) => {
+  const ref = useRef<HTMLDivElement>(null);
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const rotX = ((y - rect.height / 2) / (rect.height / 2)) * -6;
+    const rotY = ((x - rect.width / 2) / (rect.width / 2)) * 6;
+    el.style.transform = `perspective(800px) rotateX(${rotX.toFixed(2)}deg) rotateY(${rotY.toFixed(2)}deg) translateY(-4px)`;
+    el.style.transition = 'transform 0.08s ease-out, box-shadow 0.2s ease, border-color 0.2s ease';
+  };
+
+  const handlePointerLeave = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.transform = 'perspective(800px) rotateX(0deg) rotateY(0deg) translateY(0px)';
+    el.style.transition = 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease, border-color 0.2s ease';
+  };
+
+  return (
+    <div
+      ref={ref}
+      onPointerMove={handlePointerMove}
+      onPointerLeave={handlePointerLeave}
+      className={className}
+      onClick={onClick}
+      style={{
+        transformStyle: 'preserve-3d',
+        willChange: 'transform',
+        ...style,
+      }}
+    >
+      {children}
+    </div>
+  );
+};
+
 export const App: React.FC = () => {
   const engine = TransferEngine.getInstance();
   const storage = TransferStorage.getInstance();
@@ -465,8 +511,8 @@ export const App: React.FC = () => {
                 alignItems: 'center',
                 justifyContent: 'center',
                 boxShadow: isDark
-                  ? '0 12px 36px rgba(0, 0, 0, 0.8), 0 0 40px rgba(99, 102, 241, 0.3)'
-                  : '0 12px 30px rgba(15, 23, 42, 0.22)',
+                  ? '0 12px 36px rgba(0, 0, 0, 0.8), 0 0 35px rgba(255, 255, 255, 0.12)'
+                  : '0 12px 30px rgba(15, 23, 42, 0.18)',
                 marginBottom: '24px',
                 transition: 'transform 0.2s ease',
               }}
@@ -673,7 +719,7 @@ export const App: React.FC = () => {
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
-                background: 'radial-gradient(circle at 50% 25%, rgba(99, 102, 241, 0.12) 0%, transparent 60%), #09090b',
+                background: 'radial-gradient(circle at 50% 25%, rgba(255, 255, 255, 0.04) 0%, transparent 60%), #09090b',
               }}
             >
               {/* Floating Dynamic Island Pill */}
@@ -736,17 +782,18 @@ export const App: React.FC = () => {
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
                   <div
                     style={{
-                      backgroundColor: 'rgba(99, 102, 241, 0.14)',
-                      border: '1px solid rgba(99, 102, 241, 0.45)',
+                      backgroundColor: 'rgba(255, 255, 255, 0.06)',
+                      border: '1px solid rgba(255, 255, 255, 0.16)',
                       borderRadius: '14px',
                       padding: '12px 18px',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '12px',
                       flex: '1 1 200px',
+                      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
                     }}
                   >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#818cf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
                       <line x1="12" y1="18" x2="12.01" y2="18"/>
                     </svg>
@@ -823,7 +870,7 @@ export const App: React.FC = () => {
                   <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 600 }}>82% · 1.8s remaining</span>
                 </div>
                 <div style={{ height: '6px', backgroundColor: 'rgba(255, 255, 255, 0.08)', borderRadius: '9999px', overflow: 'hidden', margin: '12px 0 10px' }}>
-                  <div style={{ height: '100%', width: '82%', background: 'linear-gradient(90deg, #6366f1, #38bdf8)', borderRadius: '9999px' }} />
+                  <div style={{ height: '100%', width: '82%', background: 'linear-gradient(90deg, #34C759, #30D158)', borderRadius: '9999px' }} />
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8' }}>
                   <span>3.7 GB of 4.5 GB transferred at 67.7 MB/s</span>
@@ -842,7 +889,7 @@ export const App: React.FC = () => {
         <section id="features" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
             <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#4f46e5', marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Engine Capabilities
               </div>
               <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
@@ -854,36 +901,36 @@ export const App: React.FC = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>01 / SPEED</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>100+ MB/s LAN Streaming</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>Direct TCP and HTTP chunked streams transfer raw bytes at the physical throughput limit of your local router without uploading to any external server.</p>
-              </div>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>02 / ZERO-CONFIG</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>Seamless Auto-Discovery</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>UDP Multicast announcements detect phones and PCs on the same Wi-Fi instantly. No Bluetooth pairing pins, no login credentials, and no setup friction.</p>
-              </div>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>03 / SECURITY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>Fail-Closed Authentication</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>Single-use cryptographic upload tokens expire in 60 seconds and invalidate immediately upon transfer initiation. Spoofed device IDs receive immediate 403s.</p>
-              </div>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>04 / INTEGRITY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>SHA-256 Byte Verification</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>Receivers calculate streaming SHA-256 checksums incrementally. Files with mismatched hashes or truncated bytes are automatically rejected.</p>
-              </div>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>05 / PRIVACY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>Zero Cloud Staging</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>Files stream device-to-device directly over LAN sockets. Signaling relays negotiate WebRTC handshakes only and never touch raw file bytes.</p>
-              </div>
-              <div className="feature-card">
-                <div style={{ fontSize: '12px', fontWeight: 700, color: '#4f46e5', marginBottom: '18px' }}>06 / MESSAGING</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px' }}>Encrypted P2P Chat</h3>
-                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65 }}>Send instant messages, code snippets, and clipboard links across devices securely with zero server retention or third-party storage.</p>
-              </div>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>01 / SPEED</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>100+ MB/s LAN Streaming</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Direct TCP and HTTP chunked streams transfer raw bytes at the physical throughput limit of your local router without uploading to any external server.</p>
+              </TiltCard>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>02 / ZERO-CONFIG</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Seamless Auto-Discovery</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>UDP Multicast announcements detect phones and PCs on the same Wi-Fi instantly. No Bluetooth pairing pins, no login credentials, and no setup friction.</p>
+              </TiltCard>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>03 / SECURITY</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Fail-Closed Authentication</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Single-use cryptographic upload tokens expire in 60 seconds and invalidate immediately upon transfer initiation. Spoofed device IDs receive immediate 403s.</p>
+              </TiltCard>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>04 / INTEGRITY</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>SHA-256 Byte Verification</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Receivers calculate streaming SHA-256 checksums incrementally. Files with mismatched hashes or truncated bytes are automatically rejected.</p>
+              </TiltCard>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>05 / PRIVACY</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Zero Cloud Staging</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Files stream device-to-device directly over LAN sockets. Signaling relays negotiate WebRTC handshakes only and never touch raw file bytes.</p>
+              </TiltCard>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>06 / MESSAGING</div>
+                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Encrypted P2P Chat</h3>
+                <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Send instant messages, code snippets, and clipboard links across devices securely with zero server retention or third-party storage.</p>
+              </TiltCard>
             </div>
           </div>
         </section>
@@ -896,7 +943,7 @@ export const App: React.FC = () => {
         <section id="protocol" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
             <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#4f46e5', marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Wire Protocol Flow
               </div>
               <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
@@ -908,26 +955,26 @@ export const App: React.FC = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px' }}>
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>1</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>LAN Discovery</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Devices announce presence via UDP multicast on port 53317. Peer IP addresses and capabilities are resolved instantly.</p>
-              </div>
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>2</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Token Handshake</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral 60s key.</p>
-              </div>
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>3</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Direct Streaming</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Bytes stream directly over high-throughput local sockets or WebRTC data channels, utilizing 100% of available LAN bandwidth.</p>
-              </div>
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>4</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Checksum Audit</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>The receiver verifies exact byte length and SHA-256 hash before flushing the file to disk or the Android MediaStore gallery.</p>
-              </div>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>1</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>LAN Discovery</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Devices announce presence via UDP multicast on port 53317. Peer IP addresses and capabilities are resolved instantly.</p>
+              </TiltCard>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>2</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Token Handshake</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral 60s key.</p>
+              </TiltCard>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>3</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Direct Streaming</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Bytes stream directly over high-throughput local sockets or WebRTC data channels, utilizing 100% of available LAN bandwidth.</p>
+              </TiltCard>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>4</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Checksum Audit</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>The receiver verifies exact byte length and SHA-256 hash before flushing the file to disk or the Android MediaStore gallery.</p>
+              </TiltCard>
             </div>
           </div>
         </section>
@@ -940,7 +987,7 @@ export const App: React.FC = () => {
         <section id="architecture" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
             <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#4f46e5', marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 System Architecture
               </div>
               <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
@@ -952,9 +999,9 @@ export const App: React.FC = () => {
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(99, 102, 241, 0.15)' : '#eef2ff', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#4f46e5" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="4" y="4" width="16" height="16" rx="2"/>
                     <rect x="9" y="9" width="6" height="6"/>
                     <line x1="9" y1="1" x2="9" y2="4"/>
@@ -967,43 +1014,43 @@ export const App: React.FC = () => {
                     <line x1="1" y1="14" x2="4" y2="14"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Tauri &amp; Rust Desktop Core</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Ultra-lean 5.96 MB Windows installer with negligible RAM usage, native Windows Dynamic Island overlay, and local socket server.</p>
-              </div>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Tauri &amp; Rust Desktop Core</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Ultra-lean 5.96 MB Windows installer with negligible RAM usage, native Windows Dynamic Island overlay, and local socket server.</p>
+              </TiltCard>
 
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(22, 163, 74, 0.15)' : '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(22, 163, 74, 0.15)' : '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
                     <line x1="12" y1="18" x2="12.01" y2="18"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Flutter &amp; Kotlin Android Engine</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Optimized foreground service, dynamic notification pill, direct port 8080 HTTP server, and automatic gallery integration.</p>
-              </div>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Flutter &amp; Kotlin Android Engine</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Optimized foreground service, dynamic notification pill, direct port 8080 HTTP server, and automatic gallery integration.</p>
+              </TiltCard>
 
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(37, 99, 235, 0.15)' : '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10"/>
                     <line x1="2" y1="12" x2="22" y2="12"/>
                     <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>Universal Web P2P Engine</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Peer-to-peer browser connectivity using WebRTC DataChannels with STUN/TURN traversal for cross-network file exchanges.</p>
-              </div>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Universal Web P2P Engine</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Peer-to-peer browser connectivity using WebRTC DataChannels with STUN/TURN traversal for cross-network file exchanges.</p>
+              </TiltCard>
 
-              <div style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
-                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(147, 51, 234, 0.15)' : '#faf5ff', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px' }}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#9333ea" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                     <polyline points="9 12 11 14 15 10"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px' }}>17-Point Regression Suite</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6 }}>Automated tests continuously auditing path traversal sanitization, device identity binding, and SHA-256 byte integrity.</p>
-              </div>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>17-Point Regression Suite</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Automated tests continuously auditing path traversal sanitization, device identity binding, and SHA-256 byte integrity.</p>
+              </TiltCard>
             </div>
           </div>
         </section>
@@ -1016,7 +1063,7 @@ export const App: React.FC = () => {
         <section id="downloads" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
             <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#4f46e5', marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Production Releases
               </div>
               <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
@@ -1033,7 +1080,7 @@ export const App: React.FC = () => {
                 borderRadius={22}
                 backgroundColor={cardBg}
                 glowColor="240 80 80"
-                colors={['#6366f1', '#38bdf8', '#c084fc']}
+                colors={isDark ? ['#ffffff', '#cbd5e1', '#94a3b8'] : ['#0f172a', '#475569', '#64748b']}
                 edgeSensitivity={30}
                 glowRadius={40}
                 glowIntensity={1.0}
@@ -1042,6 +1089,7 @@ export const App: React.FC = () => {
                   style={{
                     padding: '36px 32px',
                     height: '100%',
+                    minHeight: '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1049,7 +1097,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: textPrimary }}>
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
@@ -1064,12 +1112,12 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, marginBottom: '24px' }}>
+                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
                       Tauri v2 native desktop application featuring native Windows Dynamic Island, local TCP chunk streaming, and zero-config peer discovery.
                     </p>
 
                     {/* Technical Specs Strip */}
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>x64 Arch</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Rust Engine</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>SHA-256 Verified</span>
@@ -1157,7 +1205,7 @@ export const App: React.FC = () => {
                 borderRadius={22}
                 backgroundColor={cardBg}
                 glowColor="140 80 80"
-                colors={['#16a34a', '#38bdf8', '#22c55e']}
+                colors={['#16a34a', '#4ade80', '#22c55e']}
                 edgeSensitivity={30}
                 glowRadius={40}
                 glowIntensity={1.0}
@@ -1166,6 +1214,7 @@ export const App: React.FC = () => {
                   style={{
                     padding: '36px 32px',
                     height: '100%',
+                    minHeight: '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1173,7 +1222,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16a34a' }}>
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/></svg>
@@ -1188,11 +1237,11 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, marginBottom: '24px' }}>
+                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
                       Flutter &amp; Kotlin foreground service app with real-time notification dynamic island, MediaStore gallery exports, and embedded socket server.
                     </p>
 
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>ARM64-v8a</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Scoped Storage</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Zero Battery Drain</span>
@@ -1257,7 +1306,7 @@ export const App: React.FC = () => {
                 borderRadius={22}
                 backgroundColor={cardBg}
                 glowColor="35 90 75"
-                colors={['#f59e0b', '#c084fc', '#fbbf24']}
+                colors={['#f59e0b', '#fbbf24', '#d97706']}
                 edgeSensitivity={30}
                 glowRadius={40}
                 glowIntensity={1.0}
@@ -1266,6 +1315,7 @@ export const App: React.FC = () => {
                   style={{
                     padding: '36px 32px',
                     height: '100%',
+                    minHeight: '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1273,7 +1323,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: textPrimary }}>
                           <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.61-.75 1.04-1.8 1.01-2.87-.96.04-2.06.66-2.7 1.45-.56.66-.99 1.72-.94 2.76 1.08.08 2.02-.59 2.63-1.34z"/></svg>
@@ -1288,40 +1338,67 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, marginBottom: '24px' }}>
+                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
                       Native macOS Apple Silicon DMG and Linux AppImage packages are actively compiling. Safari and Chrome users can share instantly using WebRTC data planes.
                     </p>
 
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Apple Silicon</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>AppImage</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>MIT License</span>
                     </div>
                   </div>
 
-                  <a
-                    href="https://github.com/JACK-AI7/AuraDrop"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="cursor-pointer"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '14px 22px',
-                      borderRadius: '12px',
-                      backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc',
-                      border: `1px solid ${borderSubtle}`,
-                      color: textPrimary,
-                      textDecoration: 'none',
-                      fontSize: '14px',
-                      fontWeight: 600,
-                      marginTop: 'auto',
-                    }}
-                  >
-                    <span>Track Progress on GitHub ↗</span>
-                    <span style={{ color: textMuted, fontSize: '12px' }}>Open Source</span>
-                  </a>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto' }}>
+                    <a
+                      href="https://github.com/JACK-AI7/AuraDrop#building-from-source"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cursor-pointer"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '14px 22px',
+                        borderRadius: '12px',
+                        backgroundColor: isDark ? '#ffffff' : '#0f172a',
+                        color: isDark ? '#000000' : '#ffffff',
+                        textDecoration: 'none',
+                        fontSize: '14px',
+                        fontWeight: 700,
+                        transition: 'all 0.2s ease',
+                        boxShadow: '0 4px 14px rgba(15, 23, 42, 0.15)',
+                      }}
+                    >
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                        Compile from Source (macOS DMG)
+                      </span>
+                      <span style={{ opacity: 0.85, fontSize: '13px' }}>ARM64</span>
+                    </a>
+                    <a
+                      href="https://github.com/JACK-AI7/AuraDrop"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cursor-pointer"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '12px 18px',
+                        borderRadius: '12px',
+                        backgroundColor: isDark ? 'rgba(255,255,255,0.05)' : '#f8fafc',
+                        border: `1px solid ${borderSubtle}`,
+                        color: textPrimary,
+                        textDecoration: 'none',
+                        fontSize: '13px',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <span>Track Progress on GitHub ↗</span>
+                      <span style={{ color: textMuted, fontSize: '12px' }}>Open Source</span>
+                    </a>
+                  </div>
                 </div>
               </BorderGlow>
             </div>
@@ -1336,7 +1413,7 @@ export const App: React.FC = () => {
         <section id="support" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 28px', textAlign: 'center' }}>
             <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 46px auto' }}>
-              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#4f46e5', marginBottom: '14px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: textMuted, marginBottom: '14px' }}>
                 Support Independent Development
               </div>
               <h2 style={{ fontSize: 'clamp(30px, 3.8vw, 46px)', fontWeight: 800, color: textPrimary, letterSpacing: '-0.03em', marginBottom: '16px' }}>
@@ -1351,11 +1428,11 @@ export const App: React.FC = () => {
             <BorderGlow
               borderRadius={24}
               backgroundColor={cardBg}
-              glowColor="270 80 80"
-              colors={['#6366f1', '#ec4899', '#38bdf8']}
+              glowColor="240 80 80"
+              colors={isDark ? ['#ffffff', '#cbd5e1', '#94a3b8'] : ['#0f172a', '#475569', '#64748b']}
               edgeSensitivity={32}
               glowRadius={45}
-              glowIntensity={1.1}
+              glowIntensity={1.0}
             >
               <div
                 style={{
@@ -1463,13 +1540,13 @@ export const App: React.FC = () => {
                     style={{
                       padding: '14px 20px',
                       borderRadius: '16px',
-                      background: selectedTier === 50 ? (isDark ? 'rgba(99, 102, 241, 0.25)' : '#eef2ff') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
-                      border: selectedTier === 50 ? '2px solid #4f46e5' : `1px solid ${borderSubtle}`,
+                      background: selectedTier === 50 ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
+                      border: selectedTier === 50 ? (isDark ? '2px solid #ffffff' : '2px solid #0f172a') : `1px solid ${borderSubtle}`,
                       minWidth: '130px',
                       transition: 'all 0.2s ease',
                     }}
                   >
-                    <div style={{ marginBottom: '6px', color: selectedTier === 50 ? '#4f46e5' : textMuted }}>
+                    <div style={{ marginBottom: '6px', color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textMuted }}>
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ margin: '0 auto' }}>
                         <path d="M18 8h1a4 4 0 0 1 0 8h-1"/>
                         <path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
@@ -1478,8 +1555,8 @@ export const App: React.FC = () => {
                         <line x1="14" y1="1" x2="14" y2="4"/>
                       </svg>
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: textPrimary }}>1 Coffee</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 50 ? '#4f46e5' : textMuted, marginTop: '2px', fontWeight: 600 }}>₹50 / $1</div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textPrimary }}>1 Coffee</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹50 / $1</div>
                   </div>
 
                   <div
@@ -1488,13 +1565,13 @@ export const App: React.FC = () => {
                     style={{
                       padding: '14px 20px',
                       borderRadius: '16px',
-                      background: selectedTier === 150 ? (isDark ? 'rgba(99, 102, 241, 0.25)' : '#eef2ff') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
-                      border: selectedTier === 150 ? '2px solid #4f46e5' : `1px solid ${borderSubtle}`,
+                      background: selectedTier === 150 ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
+                      border: selectedTier === 150 ? (isDark ? '2px solid #ffffff' : '2px solid #0f172a') : `1px solid ${borderSubtle}`,
                       minWidth: '130px',
                       transition: 'all 0.2s ease',
                     }}
                   >
-                    <div style={{ marginBottom: '6px', color: selectedTier === 150 ? '#4f46e5' : textMuted, display: 'flex', justifyContent: 'center', gap: '3px' }}>
+                    <div style={{ marginBottom: '6px', color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textMuted, display: 'flex', justifyContent: 'center', gap: '3px' }}>
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
                       </svg>
@@ -1505,8 +1582,8 @@ export const App: React.FC = () => {
                         <path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/>
                       </svg>
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: textPrimary }}>3 Coffees</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 150 ? '#4f46e5' : textMuted, marginTop: '2px', fontWeight: 600 }}>₹150 / $2</div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textPrimary }}>3 Coffees</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹150 / $2</div>
                   </div>
 
                   <div
@@ -1515,19 +1592,19 @@ export const App: React.FC = () => {
                     style={{
                       padding: '14px 20px',
                       borderRadius: '16px',
-                      background: selectedTier === 500 ? (isDark ? 'rgba(147, 51, 234, 0.25)' : '#faf5ff') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
-                      border: selectedTier === 500 ? '2px solid #9333ea' : `1px solid ${borderSubtle}`,
+                      background: selectedTier === 500 ? (isDark ? 'rgba(245, 158, 11, 0.2)' : '#fffbeb') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
+                      border: selectedTier === 500 ? '2px solid #f59e0b' : `1px solid ${borderSubtle}`,
                       minWidth: '130px',
                       transition: 'all 0.2s ease',
                     }}
                   >
-                    <div style={{ marginBottom: '6px', color: selectedTier === 500 ? '#9333ea' : '#eab308' }}>
+                    <div style={{ marginBottom: '6px', color: selectedTier === 500 ? '#f59e0b' : '#eab308' }}>
                       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none" style={{ margin: '0 auto' }}>
                         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
                       </svg>
                     </div>
-                    <div style={{ fontSize: '13px', fontWeight: 700, color: textPrimary }}>Supporter</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 500 ? '#9333ea' : textMuted, marginTop: '2px', fontWeight: 600 }}>₹500 / $6</div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 500 ? (isDark ? '#f59e0b' : '#b45309') : textPrimary }}>Supporter</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 500 ? (isDark ? '#f59e0b' : '#b45309') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹500 / $6</div>
                   </div>
                 </div>
               </div>
