@@ -303,7 +303,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const action   = sanitizeId(body.action   || (req.query?.action as string)   || url.searchParams.get('action')   || '');
-  const deviceId = sanitizeId(body.deviceId || body.senderId || (req.query?.deviceId as string) || url.searchParams.get('deviceId') || '');
+  const deviceId = sanitizeId(body.deviceId || body.senderId || body.initiatorDeviceId || (req.query?.deviceId as string) || url.searchParams.get('deviceId') || '');
 
   // ── 1. REGISTER ────────────────────────────────────────────────────────────
   if (action === 'register') {
@@ -442,7 +442,7 @@ export default async function handler(req: any, res: any) {
       res.statusCode = 429; res.end(JSON.stringify({ error: 'Too many requests' })); return;
     }
 
-    const deviceA  = sanitizeId(deviceId);
+    const deviceA  = sanitizeId(deviceId || body.initiatorDeviceId);
     const deviceB  = sanitizeId(body.targetDeviceId);
     const pairCode = sanitizeId(body.pairCode || body.authToken || '');
 
@@ -451,8 +451,15 @@ export default async function handler(req: any, res: any) {
     }
 
     if (!pool) {
-      res.statusCode = 503;
-      res.end(JSON.stringify({ error: 'Database unavailable — pairing requires persistent storage' }));
+      addMemoryPair(deviceA, deviceB);
+      const code = crypto.randomBytes(16).toString('hex');
+      const pairId = `pair_${[deviceA, deviceB].sort().join('_').slice(0, 80)}`;
+      const invite = { type: 'PAIR_CONFIRMED', fromDeviceId: deviceA, pairId, pairingToken: code, pairCode: code, timestamp: Date.now() };
+      const q = globalMessages.get(deviceB) || [];
+      q.push(invite);
+      globalMessages.set(deviceB, q);
+      res.statusCode = 200;
+      res.end(JSON.stringify({ success: true, status: 'paired', pairingToken: code, pairCode: code }));
       return;
     }
 
@@ -477,7 +484,7 @@ export default async function handler(req: any, res: any) {
         );
 
         // Queue pairing invitation to target
-        const invite = { type: 'PAIR_INVITE', fromDeviceId: deviceA, pairId, pairCode: code, timestamp: Date.now() };
+        const invite = { type: 'PAIR_REQUEST', fromDeviceId: deviceA, pairId, pairCode: code, pairingToken: code, timestamp: Date.now() };
         const q = globalMessages.get(deviceB) || [];
         q.push(invite);
         globalMessages.set(deviceB, q);
@@ -487,7 +494,7 @@ export default async function handler(req: any, res: any) {
         ).catch(() => {});
 
         res.statusCode = 200;
-        res.end(JSON.stringify({ success: true, status: 'pending', pairCode: code }));
+        res.end(JSON.stringify({ success: true, status: 'pending', pairCode: code, pairingToken: code }));
       } else {
         // Confirm pairing: verify code and activate
         const pairId = `pair_${[deviceA, deviceB].sort().join('_').slice(0, 80)}`;
