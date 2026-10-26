@@ -19,3 +19,6 @@ prisma/*.db
 scratch/
 target/
 **/target/
+*.apk
+public/downloads/*.apk
+apps/web/public/downloads/*.apk
