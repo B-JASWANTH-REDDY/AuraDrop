@@ -838,3 +838,192 @@ export const DiagnosticsModal: React.FC<{
   );
 };
 
+// Downloads Modal — Minimal Codex-inspired official downloads
+export const DownloadsModal: React.FC<{
+  isOpen: boolean;
+  onClose: () => void;
+}> = ({ isOpen, onClose }) => {
+  return (
+    <ModalWrapper title="Download AuraDrop Apps" isOpen={isOpen} onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <p style={{ fontSize: '13px', color: '#8E8E93', lineHeight: '1.5', margin: 0 }}>
+          High-speed local peer-to-peer file sharing with zero cloud relay. Download official binaries for Windows and Android, or share directly in Safari on iOS and Mac.
+        </p>
+
+        {/* Windows Card */}
+        <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '20px' }}>🪟</span>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF' }}>Windows Desktop</div>
+                <div style={{ fontSize: '11px', color: '#8E8E93' }}>v2.0.1 · Windows 10 / 11 (x64)</div>
+              </div>
+            </div>
+            <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '100px', background: 'rgba(52, 199, 89, 0.15)', color: '#34C759', border: '1px solid rgba(52, 199, 89, 0.3)' }}>
+              Native Island Included
+            </span>
+          </div>
+          <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.5', marginBottom: '14px' }}>
+            Tauri application featuring the floating Windows Dynamic Island pill, high-speed streaming server, and local network peer discovery.
+          </p>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <a
+              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Setup.exe"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                flex: 1,
+                minWidth: '160px',
+                background: '#FFFFFF',
+                color: '#000000',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 800,
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>Download .exe</span>
+              <span style={{ fontSize: '11px', opacity: 0.7 }}>5.96 MB</span>
+            </a>
+            <a
+              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Windows.msi"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                background: '#24242A',
+                color: '#FFFFFF',
+                border: '1px solid #33333C',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                textDecoration: 'none',
+              }}
+            >
+              MSI (9.25 MB)
+            </a>
+            <a
+              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Windows.zip"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                background: '#24242A',
+                color: '#FFFFFF',
+                border: '1px solid #33333C',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                textDecoration: 'none',
+              }}
+            >
+              ZIP (8.42 MB)
+            </a>
+          </div>
+        </div>
+
+        {/* Android Card */}
+        <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span style={{ fontSize: '20px' }}>🤖</span>
+              <div>
+                <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF' }}>Android App</div>
+                <div style={{ fontSize: '11px', color: '#8E8E93' }}>v2.0.1 · Android 8.0+ (ARM64)</div>
+              </div>
+            </div>
+            <span style={{ fontSize: '10px', fontWeight: 700, padding: '3px 8px', borderRadius: '100px', background: 'rgba(52, 199, 89, 0.15)', color: '#34C759', border: '1px solid rgba(52, 199, 89, 0.3)' }}>
+              Dynamic Island Ready
+            </span>
+          </div>
+          <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.5', marginBottom: '14px' }}>
+            Flutter client with native Dynamic Island, local LAN HTTP socket server, SHA-256 streaming verification, and direct peer-to-peer messaging.
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <a
+              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                flex: 1,
+                background: '#FFFFFF',
+                color: '#000000',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 800,
+                textDecoration: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <span>Download APK</span>
+              <span style={{ fontSize: '11px', opacity: 0.7 }}>113.7 MB</span>
+            </a>
+            <a
+              href="https://github.com/JACK-AI7/AuraDrop/releases"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                background: '#24242A',
+                color: '#FFFFFF',
+                border: '1px solid #33333C',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                textDecoration: 'none',
+              }}
+            >
+              Releases ↗
+            </a>
+          </div>
+        </div>
+
+        {/* Web Browser & Apple iOS/macOS */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <span style={{ fontSize: '18px' }}>🌐</span>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF' }}>Web App</div>
+            </div>
+            <div style={{ fontSize: '11px', color: '#34C759', fontWeight: 700, marginBottom: '6px' }}>
+              Active in this tab
+            </div>
+            <p style={{ fontSize: '11px', color: '#8E8E93', lineHeight: '1.4', margin: 0 }}>
+              Zero install. Share files instantly across Chrome, Firefox, Edge, or Safari with WebRTC.
+            </p>
+          </div>
+
+          <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '16px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <span style={{ fontSize: '18px' }}>🍎</span>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF' }}>macOS & iOS</div>
+            </div>
+            <div style={{ fontSize: '11px', color: '#FF9F0A', fontWeight: 700, marginBottom: '6px' }}>
+              Web Ready · Native in v2.1
+            </div>
+            <p style={{ fontSize: '11px', color: '#8E8E93', lineHeight: '1.4', margin: 0 }}>
+              Use directly in Safari now. Native iOS TestFlight and macOS DMG arriving in v2.1.
+            </p>
+          </div>
+        </div>
+
+        {/* Security guarantee */}
+        <div style={{ background: 'rgba(52, 199, 89, 0.08)', border: '1px solid rgba(52, 199, 89, 0.2)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+          <span style={{ fontSize: '16px' }}>🛡️</span>
+          <div style={{ fontSize: '11px', color: '#D1D5DB', lineHeight: '1.5' }}>
+            <strong style={{ color: '#34C759' }}>Direct LAN Protocol:</strong> Transfers flow directly between devices over local sockets with single-use tokens and SHA-256 byte verification. No files are uploaded to any external server.
+          </div>
+        </div>
+      </div>
+    </ModalWrapper>
+  );
+};
+

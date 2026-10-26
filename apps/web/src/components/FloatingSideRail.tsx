@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export type ActiveTab = 'globe' | 'transfers' | 'devices' | 'chat' | 'specs';
+export type ActiveTab = 'globe' | 'transfers' | 'devices' | 'chat' | 'downloads' | 'specs';
 
 interface FloatingSideRailProps {
   currentTab: ActiveTab;
@@ -27,6 +27,7 @@ export const FloatingSideRail: React.FC<FloatingSideRailProps> = ({
     { id: 'transfers', label: 'Real Transfers', sub: 'Live streaming bytes', badge: activeTransfersCount },
     { id: 'devices', label: 'Pair & Discover', sub: 'Connect devices & QR', badge: discoveredPeersCount },
     { id: 'chat', label: 'Peer Chat', sub: 'Encrypted direct messaging' },
+    { id: 'downloads', label: 'Download Apps', sub: 'Windows, Android, Mac/iOS' },
     { id: 'specs', label: 'Data Plane Specs', sub: 'V11 Engine Architecture' },
   ];
 

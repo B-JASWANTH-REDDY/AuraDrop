@@ -9,6 +9,7 @@ import {
   ProfileModal,
   TransferHistoryModal,
   DiagnosticsModal,
+  DownloadsModal,
 } from './components/Modals';
 import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
 import { TransferStorage } from './engine/transferStorage';
@@ -52,6 +53,7 @@ export const App: React.FC = () => {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isDownloadsOpen, setIsDownloadsOpen] = useState(false);
 
   // ---------------------------------------------------------------------------
   // SUBSCRIBE TO REAL ENGINE EVENTS (Zero simulation, authoritative data plane)
@@ -262,6 +264,7 @@ export const App: React.FC = () => {
           setCurrentTab('globe');
           if (tab === 'devices') setIsPairModalOpen(true);
           else if (tab === 'transfers') setIsHistoryOpen(true);
+          else if (tab === 'downloads') setIsDownloadsOpen(true);
           else if (tab === 'chat') {
             if (selectedPeer) setIsChatOpen(true);
             else if (peers.length > 0) {
@@ -301,11 +304,36 @@ export const App: React.FC = () => {
               color: '#8E8E93',
             }}
           >
-            v21 Production
+            v2.0.1
           </span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Download Official Apps Action Button */}
+          <button
+            onClick={() => setIsDownloadsOpen(true)}
+            title="Download AuraDrop Apps for Windows, Android, Mac/iOS"
+            style={{
+              background: '#FFFFFF',
+              border: 'none',
+              borderRadius: '16px',
+              padding: '6px 14px',
+              color: '#000000',
+              fontSize: '11px',
+              fontWeight: 800,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.9')}
+            onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+          >
+            <span>⬇️</span>
+            Download Apps
+          </button>
+
           {/* Pair Mobile Device Action Pill */}
           <button
             onClick={() => setIsPairModalOpen(true)}
@@ -520,19 +548,6 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      {/* FLOATING SIDE RAIL */}
-      <FloatingSideRail
-        currentTab={currentTab}
-        onSelectTab={(tab) => {
-          setCurrentTab(tab);
-          if (tab === 'chat' && selectedPeer) setIsChatOpen(true);
-          if (tab === 'devices') setIsPairModalOpen(true);
-          if (tab === 'transfers') setIsHistoryOpen(true);
-          if (tab === 'specs') setIsDiagnosticsOpen(true);
-        }}
-        activeTransfersCount={transferProgress ? 1 : 0}
-        discoveredPeersCount={peers.length}
-      />
 
       {/* 6. MAIN VIEWPORT — AUTHORITATIVE RUNTIME GLOBE + NEARBY DEVICES */}
       <main
@@ -1202,6 +1217,7 @@ export const App: React.FC = () => {
         history={transferHistory}
       />
       <DiagnosticsModal isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} />
+      <DownloadsModal isOpen={isDownloadsOpen} onClose={() => setIsDownloadsOpen(false)} />
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
