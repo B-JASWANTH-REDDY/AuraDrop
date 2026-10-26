@@ -24,9 +24,8 @@ function copyRecursiveSync(src, dest) {
       copyRecursiveSync(srcPath, destPath);
     } else {
       if (entry.name === 'index.html') {
-        fs.copyFileSync(srcPath, path.join(dest, 'index.html'));
         fs.copyFileSync(srcPath, path.join(dest, 'app.html'));
-        console.log(`[copy-web-dist] Copied ${entry.name} -> public/index.html and public/app.html`);
+        console.log(`[copy-web-dist] Copied ${entry.name} -> public/app.html (preserving Codex product website in public/index.html)`);
         continue;
       }
       fs.copyFileSync(srcPath, destPath);
