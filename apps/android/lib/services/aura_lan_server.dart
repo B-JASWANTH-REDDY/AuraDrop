@@ -238,19 +238,37 @@ class AuraLanServer {
     }
   }
 
+  // Allowed CORS origins: localhost variants, the deployed web app, and any auradrop subdomain.
+  static const _allowedOriginPatterns = [
+    'http://localhost',
+    'http://127.0.0.1',
+    'https://auradrop.network',
+    'https://auradrop.vercel.app',
+  ];
+
+  bool _isAllowedOrigin(String? origin) {
+    if (origin == null) return true; // Non-browser client (Android, desktop)
+    if (_allowedOriginPatterns.any((p) => origin.startsWith(p))) return true;
+    if (origin.contains('auradrop') && origin.startsWith('https://')) return true;
+    return false;
+  }
+
   void _listenRequests() {
     _server?.listen((HttpRequest request) async {
+      final origin = request.headers.value('origin');
+      if (!_isAllowedOrigin(origin)) {
+        request.response.statusCode = HttpStatus.forbidden;
+        request.response.write('Forbidden origin');
+        await request.response.close();
+        return;
+      }
       // Chrome Private Network Access & CORS Headers
-      final origin = request.headers.value('origin') ?? '*';
-      request.response.headers.set('Access-Control-Allow-Origin', origin);
-      request.response.headers.set(
-        'Access-Control-Allow-Methods',
-        'GET, POST, PUT, OPTIONS, HEAD',
-      );
-      request.response.headers.set(
-        'Access-Control-Allow-Headers',
-        '*',
-      );
+      if (origin != null) {
+        request.response.headers.set('Access-Control-Allow-Origin', origin);
+        request.response.headers.set('Vary', 'Origin');
+      }
+      request.response.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS, HEAD');
+      request.response.headers.set('Access-Control-Allow-Headers', 'Content-Type, X-Transfer-Id, X-One-Time-Token, X-Session-Token, X-File-Name, X-File-Size, X-Expected-Sha256, Authorization');
       request.response.headers.set('Access-Control-Allow-Private-Network', 'true');
       request.response.headers.set('Access-Control-Allow-Credentials', 'true');
 
@@ -451,16 +469,24 @@ class AuraLanServer {
             final now = DateTime.now().millisecondsSinceEpoch;
             final isBootstrapValid =
                 token.isNotEmpty && token == _activeBootstrapToken && now <= _bootstrapTokenExpiresAt;
-            final isSessionValid = token.isNotEmpty && _activeSessionTokens[clientDeviceId] == token;
-            final isTrusted = _trustedDevices.contains(clientDeviceId);
+            final isSessionValid =
+                token.isNotEmpty && _activeSessionTokens[clientDeviceId] == token;
 
-            if (isBootstrapValid || isSessionValid || isTrusted) {
+            // Fail-closed: isTrusted alone is NOT sufficient — a valid token is always required.
+            // This prevents an attacker who learns a deviceId from bypassing authentication.
+            if (isBootstrapValid || isSessionValid) {
               authenticatedDeviceId = clientDeviceId;
               _trustedDevices.add(clientDeviceId);
               _connectedLocalWebSockets[clientDeviceId] = socket;
 
-              final sessionToken = isSessionValid ? token : _generateSecureToken();
+              // Always issue a fresh session token to reduce bootstrap-token reuse window
+              final sessionToken = _generateSecureToken();
               _activeSessionTokens[clientDeviceId] = sessionToken;
+              // Invalidate bootstrap token after first use
+              if (isBootstrapValid) {
+                _activeBootstrapToken = '';
+                _bootstrapTokenExpiresAt = 0;
+              }
 
               socket.add(jsonEncode({
                 'type': 'AUTH_OK',
@@ -478,11 +504,11 @@ class AuraLanServer {
                 'port': 0,
                 'isLocal': true,
               });
-              debugPrint('[AuraLanServer] Local WebSocket client authenticated: $clientDeviceId ($clientDeviceName)');
+              debugPrint('[AuraLanServer] WebSocket authenticated: [REDACTED]');
             } else {
               socket.add(jsonEncode({
                 'type': 'AUTH_FAIL',
-                'error': 'Invalid token or untrusted device',
+                'error': 'Invalid or expired token',
               }));
               socket.close(WebSocketStatus.policyViolation, 'Authentication failed');
             }
@@ -528,16 +554,72 @@ class AuraLanServer {
   // 3. PREPARE UPLOAD (Section 7 & 8: POST /api/auradrop/v1/prepare-upload)
   // Generates single-use expiring oneTimeToken (60s TTL)
   // ---------------------------------------------------------------------------
+  static const int _maxDeclaredFileSizeBytes = 50 * 1024 * 1024 * 1024; // 50 GB
+  static const int _maxFileNameLength = 255;
+  static final RegExp _sha256Regex = RegExp(r'^[0-9a-fA-F]{64}$');
+  static final RegExp _safeTransferIdRegex = RegExp(r'^[a-zA-Z0-9_\-.:]{1,128}$');
+
   Future<void> _handlePrepareUpload(HttpRequest request) async {
     final bodyStr = await utf8.decoder.bind(request).join();
-    final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    Map<String, dynamic> data;
+    try {
+      data = jsonDecode(bodyStr) as Map<String, dynamic>;
+    } catch (_) {
+      request.response.statusCode = HttpStatus.badRequest;
+      request.response.write(jsonEncode({'error': 'Invalid JSON body'}));
+      await request.response.close();
+      return;
+    }
 
-    final transferId = data['transferId']?.toString() ??
-        'xfer_${DateTime.now().millisecondsSinceEpoch}';
+    // Validate and sanitize transferId
+    final rawTransferId = data['transferId']?.toString() ?? 'xfer_${DateTime.now().millisecondsSinceEpoch}';
+    if (!_safeTransferIdRegex.hasMatch(rawTransferId)) {
+      request.response.statusCode = HttpStatus.badRequest;
+      request.response.write(jsonEncode({'error': 'Invalid transferId'}));
+      await request.response.close();
+      return;
+    }
+    final transferId = rawTransferId;
     final fileId = data['fileId']?.toString() ?? transferId;
-    final fileName = data['fileName']?.toString() ?? 'download_file';
-    final fileSize = (data['fileSize'] as num?)?.toInt() ?? 0;
+
+    // Validate file name (reject path traversal, control chars, oversized)
+    final rawFileName = data['fileName']?.toString() ?? 'download_file';
+    if (rawFileName.contains('/') || rawFileName.contains('\\') ||
+        rawFileName.contains('..') || rawFileName.length > _maxFileNameLength ||
+        rawFileName.trim().isEmpty) {
+      request.response.statusCode = HttpStatus.badRequest;
+      request.response.write(jsonEncode({'error': 'Invalid fileName'}));
+      await request.response.close();
+      return;
+    }
+    final fileName = rawFileName;
+
+    // Validate file size (must be positive and within limit)
+    final fileSize = (data['fileSize'] as num?)?.toInt() ?? -1;
+    if (fileSize < 0 || fileSize > _maxDeclaredFileSizeBytes) {
+      request.response.statusCode = HttpStatus.badRequest;
+      request.response.write(jsonEncode({'error': 'Invalid or missing fileSize (must be 0–50 GB)'}));
+      await request.response.close();
+      return;
+    }
+
+    // Validate SHA-256 format if provided
     final sha256Expected = data['sha256']?.toString() ?? '';
+    if (sha256Expected.isNotEmpty && !_sha256Regex.hasMatch(sha256Expected)) {
+      request.response.statusCode = HttpStatus.badRequest;
+      request.response.write(jsonEncode({'error': 'Invalid sha256 format'}));
+      await request.response.close();
+      return;
+    }
+
+    // Reject if a session for this transferId already exists (anti-replay)
+    if (_preparedSessions.containsKey(transferId)) {
+      request.response.statusCode = HttpStatus.conflict;
+      request.response.write(jsonEncode({'error': 'transferId already prepared'}));
+      await request.response.close();
+      return;
+    }
+
     final senderUserId = data['senderUserId']?.toString() ?? data['senderName']?.toString() ?? 'Sender';
     final receiverUserId = data['receiverUserId']?.toString() ?? _deviceId;
 
@@ -610,10 +692,12 @@ class AuraLanServer {
     }
 
     final expectedToken = session['oneTimeToken']?.toString() ?? '';
-    if (providedToken.isNotEmpty && expectedToken.isNotEmpty && providedToken != expectedToken) {
+    // Fail-closed: BOTH tokens must be non-empty and must match.
+    // If either is empty the request is rejected.
+    if (providedToken.isEmpty || expectedToken.isEmpty || providedToken != expectedToken) {
       request.response.statusCode = HttpStatus.forbidden;
       request.response.headers.contentType = ContentType.json;
-      request.response.write(jsonEncode({'error': 'Invalid one-time token'}));
+      request.response.write(jsonEncode({'error': 'Invalid or missing one-time token'}));
       await request.response.close();
       return;
     }
@@ -626,18 +710,14 @@ class AuraLanServer {
       return;
     }
 
-    // Invalidate token immediately to enforce single-use
+    // Invalidate token immediately to enforce single-use (mark before streaming begins)
     session['used'] = true;
 
+    // Use only session-sourced metadata (not from request headers, to prevent tampering)
     final fileName = session['fileName']?.toString() ??
-        request.headers.value('x-file-name') ??
         'received_file_${DateTime.now().millisecondsSinceEpoch}';
-    final fileSize = (session['fileSize'] as num?)?.toInt() ??
-        int.tryParse(request.headers.value('x-file-size') ?? '0') ??
-        0;
-    final expectedSha = session['sha256']?.toString() ??
-        request.headers.value('x-expected-sha256') ??
-        '';
+    final fileSize = (session['fileSize'] as num?)?.toInt() ?? 0;
+    final expectedSha = session['sha256']?.toString() ?? '';
 
     // Prepare destination file paths
     final directory = await _getDownloadDirectory();
@@ -696,7 +776,21 @@ class AuraLanServer {
 
       final calculatedSha = outputDigest.events.single.toString();
 
-      // Verify SHA-256 checksum
+      // Verify exact byte count matches declared size
+      if (fileSize > 0 && transferredBytes != fileSize) {
+        if (await partFile.exists()) await partFile.delete();
+        request.response.statusCode = HttpStatus.badRequest;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode({
+          'error': 'Byte count mismatch',
+          'expected': fileSize,
+          'received': transferredBytes,
+        }));
+        await request.response.close();
+        return;
+      }
+
+      // Verify SHA-256 checksum (required when sha256 was declared)
       if (expectedSha.isNotEmpty && calculatedSha.toLowerCase() != expectedSha.toLowerCase()) {
         if (await partFile.exists()) await partFile.delete();
         request.response.statusCode = HttpStatus.badRequest;

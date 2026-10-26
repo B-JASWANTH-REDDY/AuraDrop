@@ -44,6 +44,10 @@
       "destination": "/api/$1"
     },
     {
+      "source": "/app",
+      "destination": "/app.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

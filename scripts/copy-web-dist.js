@@ -23,6 +23,12 @@ function copyRecursiveSync(src, dest) {
     if (entry.isDirectory()) {
       copyRecursiveSync(srcPath, destPath);
     } else {
+      if (entry.name === 'index.html') {
+        const appHtmlPath = path.join(dest, 'app.html');
+        fs.copyFileSync(srcPath, appHtmlPath);
+        console.log(`[copy-web-dist] Copied ${entry.name} -> ${appHtmlPath} (preserving landing page index.html)`);
+        continue;
+      }
       fs.copyFileSync(srcPath, destPath);
       console.log(`[copy-web-dist] Copied ${entry.name} -> ${destPath}`);
     }

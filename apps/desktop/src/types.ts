@@ -36,13 +36,21 @@ export interface TransferProgressPayload {
   speedMbps: number;
   etaSeconds: number;
   isIncoming: boolean;
-  status: 'transferring' | 'completed' | 'failed' | 'canceled' | 'awaiting_verification';
+  status:
+    | 'transferring' | 'sending' | 'receiving'
+    | 'completed' | 'failed' | 'canceled' | 'cancelled'
+    | 'awaiting_verification';
   peerName: string;
   error?: string | null;
   filePath?: string | null;
   sasCode?: string | null;
   isFirstContact?: boolean | null;
+  // Island-compatible aliases (emitted by some transports)
+  totalBytes?: number;
+  transferredBytes?: number;
+  speedBytesPerSec?: number;
 }
+
 
 export interface ChatMessage {
   id: string;

@@ -22,6 +22,7 @@
     "test:db-failure": "tsx tests/v17-production-db-failure-test.ts",
     "test:load": "tsx tests/load-test-1000-devices.ts",
     "test:benchmark": "tsx tests/release-benchmark-and-security.ts",
+    "test:security": "tsx tests/security-regression-suite.ts",
     "clean": "pnpm -r run clean"
   },
   "devDependencies": {

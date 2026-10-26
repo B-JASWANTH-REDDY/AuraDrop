@@ -12,6 +12,7 @@ import { ChatModal } from './components/ChatModal';
 import { ChatHubModal } from './components/ChatHubModal';
 import { UpdateModal } from './components/UpdateModal';
 import { SettingsAndAboutModal, TabKey } from './components/SettingsAndAboutModal';
+import { DesktopIsland } from './components/DesktopIsland';
 import logoImg from './assets/logo.png';
 import {
   Send,
@@ -438,6 +439,16 @@ export const App: React.FC = () => {
           onClearHistory={() => setHistory([])}
         />
       )}
+
+      {/* ── Desktop Dynamic Island ─────────────────────────────────── */}
+      <DesktopIsland
+        onOpenMain={() => {
+          // Bring the main window forward; modals already handle their own show state
+          invoke('show_main_window').catch(() => {
+            // show_main_window is optional — focus management handled by OS if not implemented
+          });
+        }}
+      />
     </div>
   );
 };
