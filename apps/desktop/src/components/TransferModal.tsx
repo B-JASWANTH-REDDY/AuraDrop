@@ -30,6 +30,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({
 
   const isCompleted = transfer.status === 'completed';
   const isFailed = transfer.status === 'failed';
+  const isWaitingDecision = transfer.status === 'awaiting_approval' || transfer.status === 'awaiting_verification';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl animate-fade-in select-none">
@@ -48,6 +49,8 @@ export const TransferModal: React.FC<TransferModalProps> = ({
                 ? 'bg-white text-black'
                 : isFailed
                 ? 'bg-neutral-800 text-white border border-white/20'
+                : isWaitingDecision
+                ? 'bg-white/15 text-white border border-white/25'
                 : 'bg-white/10 text-white'
             }`}
           >
@@ -55,6 +58,10 @@ export const TransferModal: React.FC<TransferModalProps> = ({
               <CheckCircle2 className="w-6 h-6" />
             ) : isFailed ? (
               <AlertCircle className="w-6 h-6" />
+            ) : isWaitingDecision ? (
+              <div className="w-6 h-6 flex items-center justify-center">
+                <span className="w-3 h-3 rounded-full bg-white animate-ping" />
+              </div>
             ) : transfer.isIncoming ? (
               <ArrowDownLeft className="w-6 h-6 animate-pulse" />
             ) : (
@@ -67,6 +74,10 @@ export const TransferModal: React.FC<TransferModalProps> = ({
                 ? 'Transfer Completed'
                 : isFailed
                 ? 'Transfer Failed'
+                : isWaitingDecision
+                ? transfer.isIncoming
+                  ? 'Incoming Transfer Request'
+                  : 'Waiting for Recipient...'
                 : transfer.isIncoming
                 ? 'Receiving File'
                 : 'Sending File'}
@@ -94,7 +105,7 @@ export const TransferModal: React.FC<TransferModalProps> = ({
             </p>
           </div>
           <span className="text-xs font-mono font-bold text-white">
-            {transfer.progressPercent.toFixed(0)}%
+            {isWaitingDecision ? 'PENDING' : `${transfer.progressPercent.toFixed(0)}%`}
           </span>
         </div>
 
@@ -102,16 +113,43 @@ export const TransferModal: React.FC<TransferModalProps> = ({
         <div className="w-full bg-neutral-900 border border-white/10 h-2 rounded-full overflow-hidden mb-4 relative">
           <div
             className={`h-full rounded-full transition-all duration-200 ${
-              isCompleted ? 'bg-white' : isFailed ? 'bg-neutral-600' : 'bg-white'
+              isCompleted
+                ? 'bg-white'
+                : isFailed
+                ? 'bg-neutral-600'
+                : isWaitingDecision
+                ? 'bg-white/40 animate-pulse'
+                : 'bg-white'
             }`}
-            style={{ width: `${Math.min(100, Math.max(0, transfer.progressPercent))}%` }}
+            style={{
+              width: isWaitingDecision
+                ? '100%'
+                : `${Math.min(100, Math.max(0, transfer.progressPercent))}%`,
+            }}
           />
         </div>
 
-
+        {/* Waiting Decision Context */}
+        {isWaitingDecision && (
+          <div className="p-3.5 rounded-xl bg-neutral-900 border border-white/15 text-xs text-neutral-300 mb-6 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+              <span>
+                {transfer.isIncoming
+                  ? `${transfer.peerName} wants to share this file with you.`
+                  : `Waiting for ${transfer.peerName} to accept the transfer request…`}
+              </span>
+            </div>
+            {transfer.sasCode && (
+              <span className="font-mono text-[10px] bg-white text-black px-2 py-0.5 rounded font-bold">
+                SAS: {transfer.sasCode}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Telemetry Stats */}
-        {!isCompleted && !isFailed && (
+        {!isCompleted && !isFailed && !isWaitingDecision && (
           <div className="flex items-center justify-between text-xs text-neutral-400 px-1 mb-6">
             <span>Speed: <strong className="text-white font-mono">{transfer.speedMbps.toFixed(1)} MB/s</strong></span>
             <span>ETA: <strong className="text-white font-mono">{transfer.etaSeconds}s</strong></span>
@@ -150,7 +188,34 @@ export const TransferModal: React.FC<TransferModalProps> = ({
             </>
           )}
 
-          {!isCompleted && !isFailed && onCancel && (
+          {isWaitingDecision && transfer.isIncoming && (
+            <>
+              <button
+                onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, false)}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-neutral-800 hover:bg-neutral-700 text-white border border-white/15 active:scale-95"
+              >
+                Decline
+              </button>
+              <button
+                onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, true)}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-white hover:bg-neutral-200 text-black shadow-lg shadow-white/10 active:scale-95"
+              >
+                Accept
+              </button>
+            </>
+          )}
+
+          {isWaitingDecision && !transfer.isIncoming && onCancel && (
+            <button
+              onClick={onCancel}
+              className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 flex items-center justify-center gap-1.5 active:scale-95"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Cancel Request</span>
+            </button>
+          )}
+
+          {!isCompleted && !isFailed && !isWaitingDecision && onCancel && (
             <button
               onClick={onCancel}
               className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 flex items-center justify-center gap-1.5 active:scale-95"

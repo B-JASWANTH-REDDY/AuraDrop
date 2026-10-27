@@ -257,7 +257,7 @@ impl TransferService {
             format!("stream_{}", transfer_id)
         };
 
-        // Emit initial transfer progress
+        // Emit initial status: awaiting recipient's Accept/Decline decision
         self.emit_progress(TransferProgressPayload {
             transfer_id: transfer_id.clone(),
             file_name: file_name.clone(),
@@ -267,7 +267,7 @@ impl TransferService {
             speed_mbps: 0.0,
             eta_seconds: 0,
             is_incoming: false,
-            status: "transferring".to_string(),
+            status: "awaiting_approval".to_string(),
             peer_name: peer_name.clone(),
             error: None,
             file_path: Some(file_path_str.clone()),
@@ -279,6 +279,8 @@ impl TransferService {
         let client = Client::builder()
             .tcp_nodelay(true)
             .connect_timeout(std::time::Duration::from_secs(10))
+            // 75s timeout: covers the 60s recipient consent window with 15s margin
+            .timeout(std::time::Duration::from_secs(75))
             .build()
             .unwrap_or_default();
 
@@ -936,18 +938,22 @@ async fn handle_prepare_upload(
         is_first_contact: Some(is_first_contact),
     }).await;
 
-    // If peer is already verified and trusted in TrustStore (not first contact), auto-accept immediately!
-    let user_accepted = if !is_first_contact {
-        crate::log_debug(&format!(
-            "[PrepareUpload] Inbound peer {} is verified in TrustStore - auto-accepting transfer",
-            payload.sender_user_id
-        ));
-        true
-    } else {
-        // Await user's explicit Accept or Decline decision (60 seconds)
-        match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
-            Ok(Ok(decision)) => decision,
-            _ => false,
+    // ALWAYS require explicit user Accept or Decline — trusted peer status only means we skip
+    // the cryptographic SAS verification prompt, NOT the incoming transfer consent dialog.
+    // Auto-accepting silently would allow any previously-connected peer to push files at will.
+    crate::log_debug(&format!(
+        "[PrepareUpload] Awaiting user consent for inbound transfer {} from {} (firstContact={})",
+        payload.transfer_id, payload.sender_user_id, is_first_contact
+    ));
+    let user_accepted = match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
+        Ok(Ok(decision)) => decision,
+        Ok(Err(_)) => {
+            crate::log_debug("[PrepareUpload] Decision channel closed unexpectedly — declining");
+            false
+        }
+        Err(_) => {
+            crate::log_debug("[PrepareUpload] User decision timed out after 60s — declining");
+            false
         }
     };
     service.pending_verifications.write().await.remove(&payload.transfer_id);

@@ -396,6 +396,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           fileName: fileName,
           fileSize: fileSize,
           onAccept: () async {
+            // Resolve the LAN server consent gate — this unblocks the HTTP response
+            AuraLanServer().acceptTransfer(transferId);
             setState(() {
               _transferState = TransferState.transferring;
               _activeTransferId = transferId;
@@ -406,6 +408,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             });
           },
           onDecline: () async {
+            AuraLanServer().declineTransfer(transferId);
             setState(() => _transferState = TransferState.idle);
           },
         );
@@ -418,6 +421,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           'totalFiles': 1,
         });
       });
+
 
       // Hook reactive WebRTC & Signaling events
       AuraSignalingService().onPeerList.listen((peers) {
@@ -533,7 +537,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
     }
   }
 
-  void _onNativeEvent(dynamic event) {
+  void _onNativeEvent(dynamic event) async {
     if (event is! Map) return;
     final type = event['type']?.toString();
 
@@ -628,6 +632,9 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
           fileName: fileName,
           fileSize: totalBytes,
           onAccept: () async {
+            // Resolve LAN server HTTP consent gate + native accept
+            AuraLanServer().acceptTransfer(transferId);
+            await NativeBridgeService.acceptTransfer(transferId);
             setState(() {
               _transferState = TransferState.transferring;
               _activeTransferId = transferId;
@@ -644,11 +651,11 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                 lastSeen: DateTime.now(),
               );
             });
-            await NativeBridgeService.acceptTransfer(transferId);
           },
           onDecline: () async {
-            setState(() => _transferState = TransferState.idle);
+            AuraLanServer().declineTransfer(transferId);
             await NativeBridgeService.declineTransfer(transferId);
+            setState(() => _transferState = TransferState.idle);
           },
         );
         _showIncomingTransferModal(event);
@@ -738,29 +745,38 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
 
       case 'notificationAccept':
         final tId = event['transferId']?.toString() ?? '';
-        if (tId == _activeTransferId && _activePeer != null) {
+        if (tId.isNotEmpty) {
+          AuraLanServer().acceptTransfer(tId);
+          await NativeBridgeService.acceptTransfer(tId);
           setState(() {
             _transferState = TransferState.transferring;
+            _activeTransferId = tId;
             _transferredBytes = 0;
           });
-          AuraSignalingService().sendTransferAccept(
-            targetDeviceId: _activePeer!.id,
-            transferId: tId,
-          );
+          if (_activePeer != null) {
+            AuraSignalingService().sendTransferAccept(
+              targetDeviceId: _activePeer!.id,
+              transferId: tId,
+            );
+          }
         }
         break;
 
       case 'notificationDecline':
         final tId = event['transferId']?.toString() ?? '';
-        if (tId == _activeTransferId && _activePeer != null) {
+        if (tId.isNotEmpty) {
+          AuraLanServer().declineTransfer(tId);
+          await NativeBridgeService.declineTransfer(tId);
           setState(() {
             _transferState = TransferState.idle;
-            _activeTransferId = '';
+            if (_activeTransferId == tId) _activeTransferId = '';
           });
-          AuraSignalingService().sendTransferDecline(
-            targetDeviceId: _activePeer!.id,
-            transferId: tId,
-          );
+          if (_activePeer != null) {
+            AuraSignalingService().sendTransferDecline(
+              targetDeviceId: _activePeer!.id,
+              transferId: tId,
+            );
+          }
         }
         break;
 
@@ -1121,6 +1137,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                           Navigator.pop(ctx);
                           InAppNotificationController().dismissById('req_$transferId');
                           setState(() => _transferState = TransferState.idle);
+                          // Resolve LAN server consent gate + native decline
+                          AuraLanServer().declineTransfer(transferId);
                           await NativeBridgeService.declineTransfer(transferId);
                         },
                         child: const Text(
@@ -1160,6 +1178,8 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                               lastSeen: DateTime.now(),
                             );
                           });
+                          // Resolve LAN server consent gate + native accept
+                          AuraLanServer().acceptTransfer(transferId);
                           await NativeBridgeService.acceptTransfer(transferId);
                         },
                         child: const Text(

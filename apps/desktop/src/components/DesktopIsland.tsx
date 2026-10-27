@@ -95,18 +95,19 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
 
     case 'TRANSFER_REQUEST': {
       const p = action.payload;
+      const isInc = p.isIncoming !== undefined ? p.isIncoming : true;
       return {
         ...state,
         phase: 'waiting_approval',
         expanded: true,
         transferId: p.transferId || state.transferId,
-        fileName: p.fileName || state.fileName || 'Incoming File',
+        fileName: p.fileName || state.fileName || (isInc ? 'Incoming File' : 'Transferring File'),
         filePath: p.filePath || '',
         fileSizeBytes: p.fileSize ?? p.totalBytes ?? state.fileSizeBytes,
         transferredBytes: 0,
         speedBytesPerSec: 0,
         etaSeconds: 0,
-        isIncoming: true,
+        isIncoming: isInc,
         peerName: p.peerName || state.peerName || 'Nearby Device',
         sasCode: p.sasCode || '',
         errorMessage: '',
@@ -345,7 +346,7 @@ export const DesktopIsland: React.FC<{
           isIncoming: isInc,
         };
 
-        if (p.status === 'awaiting_verification') {
+        if (p.status === 'awaiting_verification' || p.status === 'awaiting_approval') {
           dispatch({ type: 'TRANSFER_REQUEST', payload: normalized });
         } else if (p.status === 'verifying') {
           dispatch({ type: 'TRANSFER_VERIFYING', payload: normalized });
@@ -467,7 +468,7 @@ export const DesktopIsland: React.FC<{
       case 'discovering':
         return state.peerCount === 1 ? state.peerName || '1 Device' : `${state.peerCount} nearby`;
       case 'waiting_approval':
-        return `AirDrop: ${state.peerName}`;
+        return state.isIncoming ? `AirDrop: ${state.peerName}` : `Waiting for ${state.peerName}…`;
       case 'transferring':
         return `${state.isIncoming ? '⬇' : '⬆'} ${pct}% · ${fmtSpeed(state.speedBytesPerSec)}`;
       case 'verifying':
@@ -641,7 +642,7 @@ export const DesktopIsland: React.FC<{
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#FFFFFF', lineHeight: 1.2 }}>
                 {state.phase === 'waiting_approval'
-                  ? 'AirDrop'
+                  ? (state.isIncoming ? 'AirDrop Request' : 'Waiting for Recipient...')
                   : state.phase === 'verifying'
                   ? 'Verifying Integrity...'
                   : state.phase === 'transferring'
@@ -667,7 +668,9 @@ export const DesktopIsland: React.FC<{
                 }}
               >
                 {state.phase === 'waiting_approval'
-                  ? `${state.peerName} would like to share "${state.fileName}"`
+                  ? (state.isIncoming
+                      ? `${state.peerName} would like to share "${state.fileName}"`
+                      : `Waiting for ${state.peerName} to accept "${state.fileName}"...`)
                   : state.phase === 'transferring'
                   ? state.fileName
                   : state.phase === 'verifying'
@@ -750,43 +753,63 @@ export const DesktopIsland: React.FC<{
           {/* Bottom Action Pill Buttons: Apple Style Full Rounded Pills */}
           <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
             {state.phase === 'waiting_approval' && (
-              <>
+              state.isIncoming ? (
+                <>
+                  <button
+                    onClick={handleDecline}
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      borderRadius: 9999,
+                      background: '#2C2C2E',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: '#FFFFFF',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    Decline
+                  </button>
+                  <button
+                    onClick={handleAccept}
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      borderRadius: 9999,
+                      background: '#007AFF',
+                      border: 'none',
+                      color: '#FFFFFF',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                      boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    Accept
+                  </button>
+                </>
+              ) : (
                 <button
                   onClick={handleDecline}
                   style={{
-                    flex: 1,
+                    width: '100%',
                     height: 40,
                     borderRadius: 9999,
                     background: '#2C2C2E',
                     border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#FFFFFF',
-                    fontSize: 14,
-                    fontWeight: 700,
+                    color: '#EF4444',
+                    fontSize: 13,
+                    fontWeight: 600,
                     cursor: 'pointer',
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  Decline
+                  Cancel Request
                 </button>
-                <button
-                  onClick={handleAccept}
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    borderRadius: 9999,
-                    background: '#007AFF',
-                    border: 'none',
-                    color: '#FFFFFF',
-                    fontSize: 14,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  Accept
-                </button>
-              </>
+              )
             )}
 
             {state.phase === 'transferring' && (

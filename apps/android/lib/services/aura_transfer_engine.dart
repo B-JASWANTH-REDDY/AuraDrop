@@ -182,7 +182,8 @@ class AuraTransferEngine {
       final bodyBytes = utf8.encode(preparePayload);
       prepareReq.contentLength = bodyBytes.length;
       prepareReq.add(bodyBytes);
-      final prepareResp = await prepareReq.close().timeout(const Duration(seconds: 45));
+      // 75s timeout: covers recipient's 60s consent window with 15s margin
+      final prepareResp = await prepareReq.close().timeout(const Duration(seconds: 75));
 
       if (prepareResp.statusCode != HttpStatus.ok) {
         _errorController.add('Recipient declined or unavailable');

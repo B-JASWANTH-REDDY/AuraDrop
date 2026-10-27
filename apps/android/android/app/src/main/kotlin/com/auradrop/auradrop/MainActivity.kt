@@ -2338,20 +2338,15 @@ class MainActivity : FlutterActivity() {
                     sendEvent("incomingShareRequest", shareEventMap)
                     sendEvent("transferRequest", shareEventMap)
 
-                    // Auto-approve if peer is already verified and trusted in TrustStore, or recently approved in this session
-                    val recentlyApprovedTime = recentlyApprovedSenders[senderUserId] ?: 0L
-                    val isRecentlyApproved = (System.currentTimeMillis() - recentlyApprovedTime) < 15 * 60 * 1000L
-                    val isPeerTrusted = AuraIdentityManager.isPeerTrusted(applicationContext, senderUserId)
-
-                    val accepted = if (isRecentlyApproved || isPeerTrusted || !isFirstContact) {
-                        Log.i(TAG, "[AuraTransfer] Inbound transfer from trusted/recent peer $senderUserId - auto-approved")
-                        cancelSystemIncomingShareNotification(xferId)
-                        true
-                    } else {
-                        // Await user's explicit Accept or Decline decision (up to 60 seconds)
-                        withTimeoutOrNull(60000L) {
-                            decisionDeferred.await()
-                        } ?: false
+                    // ALWAYS require explicit user Accept or Decline — no auto-approve.
+                    // Previously trusting a peer means we skip the SAS verification code only,
+                    // NOT the incoming share consent dialog. Any peer can send only if the user taps Accept.
+                    Log.i(TAG, "[AuraTransfer] Awaiting user consent for inbound transfer $xferId from $senderUserId (firstContact=$isFirstContact)")
+                    val accepted = withTimeoutOrNull(60000L) {
+                        decisionDeferred.await()
+                    } ?: run {
+                        Log.w(TAG, "[AuraTransfer] User decision timed out for $xferId — declining automatically")
+                        false
                     }
                     pendingHttpDecisions.remove(xferId)
                     if (accepted) {
@@ -2776,10 +2771,6 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun acceptIncomingTransfer(transferId: String) {
-        val sessionMeta = httpUploadSessions[transferId]
-        if (sessionMeta != null) {
-            recentlyApprovedSenders[sessionMeta.senderUserId] = System.currentTimeMillis()
-        }
         val httpDeferred = pendingHttpDecisions.remove(transferId)
         if (httpDeferred != null) {
             dbHelper.updateIncomingRequestStatus(transferId, "ACCEPTED")
@@ -4429,7 +4420,56 @@ class MainActivity : FlutterActivity() {
             if (isPhoto) "1 photo" else firstFileName
         }
 
-        // Display directly on mobile screen ONLY when outside the app (home screen / lock screen / other apps)
+        // 1. Post High-Priority Lock Screen & Heads-up Notification with Accept / Decline action buttons
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val openAppIntent = packageManager.getLaunchIntentForPackage(packageName)
+            val openPendingIntent = if (openAppIntent != null) {
+                PendingIntent.getActivity(this, transferId.hashCode(), openAppIntent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            } else null
+
+            val acceptIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
+                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_ACCEPT
+                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
+            }
+            val acceptPending = PendingIntent.getBroadcast(
+                this,
+                (transferId + "_accept").hashCode(),
+                acceptIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val declineIntent = Intent(this, AuraNotificationActionReceiver::class.java).apply {
+                action = AuraNotificationActionReceiver.ACTION_NOTIFICATION_DECLINE
+                putExtra(AuraNotificationActionReceiver.EXTRA_TRANSFER_ID, transferId)
+            }
+            val declinePending = PendingIntent.getBroadcast(
+                this,
+                (transferId + "_decline").hashCode(),
+                declineIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notificationBuilder = NotificationCompat.Builder(this, INCOMING_REQUEST_CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("AirDrop • $nameToShow")
+                .setContentText("Wants to share $fileSummary (${formatBytes(totalBytes)})")
+                .setStyle(NotificationCompat.BigTextStyle().bigText("$nameToShow wants to share $fileSummary (${formatBytes(totalBytes)}) via Direct Wi-Fi."))
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setOngoing(true)
+                .setContentIntent(openPendingIntent)
+                .addAction(android.R.drawable.ic_delete, "Decline", declinePending)
+                .addAction(android.R.drawable.ic_input_add, "Accept", acceptPending)
+
+            nm.notify(transferId.hashCode(), notificationBuilder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to post incoming share notification: ${e.message}")
+        }
+
+        // 2. Display Dynamic Island floating overlay directly on mobile screen (over other apps & lock screen)
         if (!isAppInForeground) {
             overlayMgr.showTransferRequestOverlay(
                 transferId = transferId,
@@ -4437,10 +4477,12 @@ class MainActivity : FlutterActivity() {
                 fileName = fileSummary,
                 totalBytes = totalBytes,
                 onAccept = {
+                    cancelSystemIncomingShareNotification(transferId)
                     acceptIncomingTransfer(transferId)
                     sendEvent("notificationAccept", mapOf("transferId" to transferId))
                 },
                 onDecline = {
+                    cancelSystemIncomingShareNotification(transferId)
                     declineIncomingTransfer(transferId)
                     sendEvent("notificationDecline", mapOf("transferId" to transferId))
                 }
@@ -4449,6 +4491,10 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun cancelSystemIncomingShareNotification(transferId: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(transferId.hashCode())
+        } catch (_: Exception) {}
         AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
     }
 

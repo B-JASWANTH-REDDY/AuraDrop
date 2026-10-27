@@ -52,6 +52,9 @@ class AuraLanServer {
   final Set<String> _trustedDevices = {};
   final Map<String, WebSocket> _connectedLocalWebSockets = {};
 
+  // Consent gate: maps transferId → Completer<bool> awaiting user Accept/Decline
+  final Map<String, Completer<bool>> _pendingDecisions = {};
+
   // Streams
   final _progressController = StreamController<AuraLanServerProgress>.broadcast();
   final _completeController = StreamController<Map<String, dynamic>>.broadcast();
@@ -78,6 +81,22 @@ class AuraLanServer {
 
   void trustDevice(String deviceId) => _trustedDevices.add(deviceId);
   bool isDeviceTrusted(String deviceId) => _trustedDevices.contains(deviceId);
+
+  /// Called by the Flutter UI (or native bridge) when the user taps Accept for an incoming transfer.
+  void acceptTransfer(String transferId) {
+    final completer = _pendingDecisions.remove(transferId);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(true);
+    }
+  }
+
+  /// Called by the Flutter UI (or native bridge) when the user taps Decline for an incoming transfer.
+  void declineTransfer(String transferId) {
+    final completer = _pendingDecisions.remove(transferId);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(false);
+    }
+  }
 
   String generateBootstrapToken() {
     _activeBootstrapToken = _generateSecureToken();
@@ -626,7 +645,7 @@ class AuraLanServer {
     final token = _generateSecureToken();
     final expiresAt = DateTime.now().millisecondsSinceEpoch + 60000; // 60 seconds TTL
 
-    _preparedSessions[transferId] = {
+    final sessionData = {
       'transferId': transferId,
       'fileId': fileId,
       'fileName': fileName,
@@ -640,9 +659,44 @@ class AuraLanServer {
       'used': false,
       'preparedAt': DateTime.now().millisecondsSinceEpoch,
     };
+    _preparedSessions[transferId] = sessionData;
 
-    // Emit event for Android native heads-up notification / UI
-    _requestController.add(_preparedSessions[transferId]!);
+    // Emit event so the UI (in-app dialog + system notification) can show the incoming request.
+    // The HTTP response is held open until the user explicitly taps Accept or Decline.
+    _requestController.add(Map<String, dynamic>.from(sessionData));
+
+    // Create the consent gate: the HTTP connection is held open for up to 60 seconds.
+    final completer = Completer<bool>();
+    _pendingDecisions[transferId] = completer;
+
+    // Await user Accept or Decline (60 second timeout → auto-decline).
+    bool userAccepted;
+    try {
+      userAccepted = await completer.future.timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          debugPrint('[AuraLanServer] Consent timeout for $transferId — auto-declining');
+          _pendingDecisions.remove(transferId);
+          return false;
+        },
+      );
+    } catch (e) {
+      debugPrint('[AuraLanServer] Decision error for $transferId: $e');
+      userAccepted = false;
+    }
+    _pendingDecisions.remove(transferId);
+
+    if (!userAccepted) {
+      _preparedSessions.remove(transferId);
+      request.response.statusCode = HttpStatus.forbidden;
+      request.response.headers.contentType = ContentType.json;
+      request.response.write(jsonEncode({
+        'accepted': false,
+        'error': 'Transfer declined by recipient',
+      }));
+      await request.response.close();
+      return;
+    }
 
     request.response.statusCode = HttpStatus.ok;
     request.response.headers.contentType = ContentType.json;

@@ -40,7 +40,8 @@ export interface TransferProgressPayload {
     | 'transferring' | 'sending' | 'receiving'
     | 'verifying'
     | 'completed' | 'failed' | 'canceled' | 'cancelled'
-    | 'awaiting_verification';
+    | 'awaiting_verification'
+    | 'awaiting_approval';
   peerName: string;
   error?: string | null;
   filePath?: string | null;
