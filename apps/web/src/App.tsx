@@ -1,19 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HeroGlobe } from './components/HeroGlobe';
-import { DevicePairModal } from './components/DevicePairModal';
-import {
-  ChatModal,
-  SettingsModal,
-  ProfileModal,
-  TransferHistoryModal,
-  DiagnosticsModal,
-  DownloadsModal,
-} from './components/Modals';
+import { DownloadsModal } from './components/Modals';
 import { LegalModal, LegalTab } from './components/LegalModal';
 import { CookieConsentBanner } from './components/CookieConsentBanner';
 import { CommandMenu } from './components/CommandMenu';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
-import { LiveStatusPill } from './components/LiveStatusPill';
 import { analytics } from './engine/analytics';
 import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
 import { TransferStorage } from './engine/transferStorage';
@@ -108,12 +99,6 @@ export const App: React.FC = () => {
   const [supportNotice, setSupportNotice] = useState<string>('');
 
   // Modals
-  const [isPairModalOpen, setIsPairModalOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isProfileOpen, setIsProfileOpen] = useState(false);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isDownloadsOpen, setIsDownloadsOpen] = useState(false);
   const [isLegalOpen, setIsLegalOpen] = useState(false);
   const [legalTab, setLegalTab] = useState<LegalTab>('privacy');
@@ -238,7 +223,13 @@ export const App: React.FC = () => {
     addToast({
       title: 'UPI ID Copied',
       description: '9182769225@ybl ready to paste in GPay, PhonePe, or Paytm',
-      icon: '📋',
+      icon: (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#22c55e" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+          <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+          <path d="m9 14 2 2 4-4" />
+        </svg>
+      ),
       actionLabel: 'Dismiss',
     });
     setTimeout(() => setCopiedUpi(false), 2500);
@@ -251,7 +242,11 @@ export const App: React.FC = () => {
     addToast({
       title: 'Support Tier Selected',
       description: msg,
-      icon: '❤️',
+      icon: (
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="#ef4444" stroke="#ef4444" strokeWidth="1">
+          <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
+        </svg>
+      ),
       actionLabel: 'Undo',
       onAction: () => setSupportNotice(''),
     });
@@ -576,29 +571,6 @@ export const App: React.FC = () => {
               Get AuraDrop
             </a>
 
-            {/* Settings Dialog Trigger */}
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              title="AuraDrop Settings"
-              style={{
-                width: '36px',
-                height: '36px',
-                borderRadius: '50%',
-                background: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f1f5f9',
-                border: `1px solid ${borderSubtle}`,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: textPrimary,
-                cursor: 'pointer',
-              }}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="12" r="3"/>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-              </svg>
-            </button>
-
             {/* Mobile Navigation Toggle Button */}
             <button
               className="mobile-menu-btn cursor-pointer"
@@ -751,9 +723,25 @@ export const App: React.FC = () => {
               />
             </div>
 
-            {/* Protocol & Live Status Badge Row */}
+            {/* Showcase Status Badge Row */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
-              <LiveStatusPill peerCount={peers.length} onClick={() => setIsDiagnosticsOpen(true)} isDark={isDark} />
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '6px 16px',
+                  borderRadius: '9999px',
+                  backgroundColor: isDark ? 'rgba(34, 197, 94, 0.12)' : 'rgba(34, 197, 94, 0.1)',
+                  border: `1px solid ${isDark ? 'rgba(34, 197, 94, 0.28)' : 'rgba(34, 197, 94, 0.25)'}`,
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  color: isDark ? '#4ade80' : '#15803d',
+                }}
+              >
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block', boxShadow: '0 0 8px #22c55e' }} />
+                <span>AuraDrop Showcase · Production v2.0.1</span>
+              </div>
               <span
                 style={{
                   display: 'inline-flex',
@@ -768,7 +756,7 @@ export const App: React.FC = () => {
                   color: textMuted,
                 }}
               >
-                <span>Zero Cloud Relay · P2P</span>
+                <span>Zero Cloud Relay · Direct LAN Speed</span>
               </span>
             </div>
 
@@ -1929,7 +1917,7 @@ export const App: React.FC = () => {
                       className="nav-link cursor-pointer"
                       style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit', color: '#60a5fa' }}
                     >
-                      Cookie Settings ⚙️
+                      Cookie Preferences
                     </button>
                   </li>
                 </ul>
@@ -1972,32 +1960,7 @@ export const App: React.FC = () => {
       </footer>
 
       {/* MODALS & OVERLAYS */}
-      <DevicePairModal
-        isOpen={isPairModalOpen}
-        onClose={() => setIsPairModalOpen(false)}
-        localId={engine.localId}
-        localName={engine.localName}
-        peers={peers}
-      />
-      <ChatModal isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} peer={selectedPeer} />
-      <TransferHistoryModal
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-        history={transferHistory}
-      />
-      <DiagnosticsModal isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} isDark={isDark} />
       <DownloadsModal isOpen={isDownloadsOpen} onClose={() => setIsDownloadsOpen(false)} isDark={isDark} />
-      <SettingsModal
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        visibility={visibility}
-        onVisibilityChange={setVisibility}
-      />
-      <ProfileModal
-        isOpen={isProfileOpen}
-        onClose={() => setIsProfileOpen(false)}
-        deviceName={engine.localName}
-      />
       <LegalModal
         isOpen={isLegalOpen}
         onClose={() => setIsLegalOpen(false)}
@@ -2014,17 +1977,16 @@ export const App: React.FC = () => {
         isOpen={isCommandMenuOpen}
         onClose={() => setIsCommandMenuOpen(false)}
         onOpenDownloads={() => setIsDownloadsOpen(true)}
-        onOpenPairing={() => setIsPairModalOpen(true)}
-        onOpenHistory={() => setIsHistoryOpen(true)}
-        onOpenChat={() => setIsChatOpen(true)}
-        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
-        onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenLegal={(tab) => {
           setLegalTab(tab);
           setIsLegalOpen(true);
         }}
         onToggleTheme={() => setTheme(isDark ? 'light' : 'dark')}
         isDark={isDark}
+        onScrollToSection={(id) => {
+          const el = document.getElementById(id);
+          if (el) el.scrollIntoView({ behavior: 'smooth' });
+        }}
       />
       <ToastNotification toasts={toasts} onDismiss={dismissToast} />
     </div>

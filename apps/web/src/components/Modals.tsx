@@ -973,7 +973,11 @@ export const DownloadsModal: React.FC<{
         <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <span style={{ fontSize: '20px' }}>🤖</span>
+              <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(52, 199, 89, 0.15)', border: '1px solid rgba(52, 199, 89, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34C759', flexShrink: 0 }}>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/>
+                </svg>
+              </div>
               <div>
                 <div style={{ fontSize: '15px', fontWeight: 800, color: '#FFFFFF' }}>Android App</div>
                 <div style={{ fontSize: '11px', color: '#8E8E93' }}>v2.0.1 · Android 8.0+ (ARM64)</div>
@@ -1047,7 +1051,13 @@ export const DownloadsModal: React.FC<{
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
           <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <span style={{ fontSize: '18px' }}>🌐</span>
+              <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa', flexShrink: 0 }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <line x1="2" y1="12" x2="22" y2="12"/>
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+                </svg>
+              </div>
               <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF' }}>Web App</div>
             </div>
             <div style={{ fontSize: '11px', color: '#34C759', fontWeight: 700, marginBottom: '6px' }}>
@@ -1060,7 +1070,11 @@ export const DownloadsModal: React.FC<{
 
           <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
-              <span style={{ fontSize: '18px' }}>🍎</span>
+              <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'rgba(255, 255, 255, 0.08)', border: '1px solid rgba(255, 255, 255, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffffff', flexShrink: 0 }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.61-.75 1.04-1.8 1.01-2.87-.96.04-2.06.66-2.7 1.45-.56.66-.99 1.72-.94 2.76 1.08.08 2.02-.59 2.63-1.34z"/>
+                </svg>
+              </div>
               <div style={{ fontSize: '14px', fontWeight: 800, color: '#FFFFFF' }}>macOS & iOS</div>
             </div>
             <div style={{ fontSize: '11px', color: '#FF9F0A', fontWeight: 700, marginBottom: '6px' }}>
@@ -1074,7 +1088,12 @@ export const DownloadsModal: React.FC<{
 
         {/* Security guarantee */}
         <div style={{ background: 'rgba(52, 199, 89, 0.08)', border: '1px solid rgba(52, 199, 89, 0.2)', borderRadius: '12px', padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
-          <span style={{ fontSize: '16px' }}>🛡️</span>
+          <div style={{ width: '22px', height: '22px', borderRadius: '6px', background: 'rgba(52, 199, 89, 0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34C759', flexShrink: 0, marginTop: '1px' }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              <path d="m9 12 2 2 4-4"/>
+            </svg>
+          </div>
           <div style={{ fontSize: '11px', color: '#D1D5DB', lineHeight: '1.5' }}>
             <strong style={{ color: '#34C759' }}>Direct LAN Protocol:</strong> Transfers flow directly between devices over local sockets with single-use tokens and SHA-256 byte verification. No files are uploaded to any external server.
           </div>

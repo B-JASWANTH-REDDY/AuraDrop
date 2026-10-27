@@ -4,7 +4,7 @@ export interface ToastMessage {
   id: string;
   title: string;
   description?: string;
-  icon?: string;
+  icon?: React.ReactNode;
   actionLabel?: string;
   onAction?: () => void;
 }
