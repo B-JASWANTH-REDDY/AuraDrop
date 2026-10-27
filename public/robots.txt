@@ -1,0 +1,11 @@
+# https://www.robotstxt.org/robotstxt.html
+User-agent: *
+Allow: /
+Allow: /downloads/
+Allow: /version.json
+
+# Disallow API signaling raw sockets from indexing
+Disallow: /api/signaling
+Disallow: /api/conversations
+
+Sitemap: https://auradrop.org/sitemap.xml

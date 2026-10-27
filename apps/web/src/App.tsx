@@ -9,6 +9,12 @@ import {
   DiagnosticsModal,
   DownloadsModal,
 } from './components/Modals';
+import { LegalModal, LegalTab } from './components/LegalModal';
+import { CookieConsentBanner } from './components/CookieConsentBanner';
+import { CommandMenu } from './components/CommandMenu';
+import { ToastNotification, ToastMessage } from './components/ToastNotification';
+import { LiveStatusPill } from './components/LiveStatusPill';
+import { analytics } from './engine/analytics';
 import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
 import { TransferStorage } from './engine/transferStorage';
 import { PeerDevice, PickedFile, TransferProgress, TransferRecord, VisibilityMode } from './types';
@@ -28,6 +34,7 @@ const TiltCard: React.FC<{
   const ref = useRef<HTMLDivElement>(null);
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
     const el = ref.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -68,6 +75,16 @@ export const App: React.FC = () => {
   const engine = TransferEngine.getInstance();
   const storage = TransferStorage.getInstance();
 
+  // Screen width for reactive mobile layout
+  const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Theme mode: light or dark (default light with dark dot matrix)
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const isDark = theme === 'dark';
@@ -98,6 +115,63 @@ export const App: React.FC = () => {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isDownloadsOpen, setIsDownloadsOpen] = useState(false);
+  const [isLegalOpen, setIsLegalOpen] = useState(false);
+  const [legalTab, setLegalTab] = useState<LegalTab>('privacy');
+  const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
+
+  // Undo Toasts
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const addToast = (toast: Omit<ToastMessage, 'id'>) => {
+    const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    setToasts((prev) => [...prev, { ...toast, id }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 4500);
+  };
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Global Keyboard Shortcuts (Cmd+K / Ctrl+K Command Menu)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandMenuOpen((prev) => !prev);
+        analytics.track('command_menu_opened');
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
+
+  // URL Hash routing for policies (#privacy, #terms, #cookies, #refund, #downloads)
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash.toLowerCase();
+      if (hash === '#privacy') {
+        setLegalTab('privacy');
+        setIsLegalOpen(true);
+        analytics.track('policy_viewed', { tab: 'privacy' });
+      } else if (hash === '#terms') {
+        setLegalTab('terms');
+        setIsLegalOpen(true);
+        analytics.track('policy_viewed', { tab: 'terms' });
+      } else if (hash === '#cookies') {
+        setLegalTab('cookies');
+        setIsLegalOpen(true);
+        analytics.track('policy_viewed', { tab: 'cookies' });
+      } else if (hash === '#refund') {
+        setLegalTab('refund');
+        setIsLegalOpen(true);
+        analytics.track('policy_viewed', { tab: 'refund' });
+      }
+    };
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    analytics.track('page_view');
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
 
   // Window preview ref for smooth scroll
   const windowPreviewRef = useRef<HTMLDivElement>(null);
@@ -161,12 +235,26 @@ export const App: React.FC = () => {
     navigator.clipboard.writeText('9182769225@ybl');
     setCopiedUpi(true);
     setSupportNotice('UPI ID copied to clipboard (9182769225@ybl)');
+    addToast({
+      title: 'UPI ID Copied',
+      description: '9182769225@ybl ready to paste in GPay, PhonePe, or Paytm',
+      icon: '📋',
+      actionLabel: 'Dismiss',
+    });
     setTimeout(() => setCopiedUpi(false), 2500);
   };
 
   // Handle SlideCommit success
   const handleSlideCommit = () => {
-    setSupportNotice(`Thank you for supporting AuraDrop with ₹${selectedTier}!`);
+    const msg = `Thank you for supporting AuraDrop with ₹${selectedTier}!`;
+    setSupportNotice(msg);
+    addToast({
+      title: 'Support Tier Selected',
+      description: msg,
+      icon: '❤️',
+      actionLabel: 'Undo',
+      onAction: () => setSupportNotice(''),
+    });
   };
 
   // Scroll helper
@@ -353,10 +441,11 @@ export const App: React.FC = () => {
 
           {/* Center Nav Links */}
           <nav
+            className="desktop-nav"
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '32px',
+              gap: '28px',
               listStyle: 'none',
             }}
           >
@@ -369,7 +458,35 @@ export const App: React.FC = () => {
           </nav>
 
           {/* Right Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            {/* Live Signaling Status Indicator */}
+            <div className="desktop-nav">
+              <LiveStatusPill peerCount={peers.length} onClick={() => setIsDiagnosticsOpen(true)} isDark={isDark} />
+            </div>
+
+            {/* Quick Find (⌘K) Command Menu Trigger */}
+            <button
+              onClick={() => setIsCommandMenuOpen(true)}
+              title="Search & Commands (⌘K / Ctrl+K)"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '7px 12px',
+                borderRadius: '9999px',
+                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f1f5f9',
+                border: `1px solid ${borderSubtle}`,
+                color: textMuted,
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 600,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <span>Quick Find</span>
+              <kbd style={{ fontSize: '10px', background: isDark ? '#1a1a20' : '#e2e8f0', padding: '1px 5px', borderRadius: '4px', border: `1px solid ${borderSubtle}` }}>⌘K</kbd>
+            </button>
             {/* Light / Dark Mode Toggle Selector */}
             <button
               onClick={() => setTheme(isDark ? 'light' : 'dark')}
@@ -414,7 +531,7 @@ export const App: React.FC = () => {
               href="https://github.com/JACK-AI7/AuraDrop"
               target="_blank"
               rel="noopener noreferrer"
-              className="cursor-pointer"
+              className="desktop-btn cursor-pointer"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -439,7 +556,7 @@ export const App: React.FC = () => {
             {/* Get AuraDrop Download Button */}
             <a
               href="#downloads"
-              className="cursor-pointer"
+              className="desktop-btn cursor-pointer"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -479,8 +596,114 @@ export const App: React.FC = () => {
                 <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
               </svg>
             </button>
+
+            {/* Mobile Navigation Toggle Button */}
+            <button
+              className="mobile-menu-btn cursor-pointer"
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              title="Menu"
+              aria-label="Toggle navigation menu"
+              style={{
+                width: '36px',
+                height: '36px',
+                borderRadius: '50%',
+                backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f1f5f9',
+                border: `1px solid ${borderSubtle}`,
+                display: 'none',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: textPrimary,
+                cursor: 'pointer',
+              }}
+            >
+              {isMobileMenuOpen ? (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="4" y1="6" x2="20" y2="6"/>
+                  <line x1="4" y1="12" x2="20" y2="12"/>
+                  <line x1="4" y1="18" x2="20" y2="18"/>
+                </svg>
+              )}
+            </button>
           </div>
         </div>
+
+        {/* Mobile Navigation Drawer */}
+        {isMobileMenuOpen && (
+          <div
+            className="mobile-nav-drawer"
+            style={{
+              backgroundColor: isDark ? '#09090b' : '#ffffff',
+              borderTop: `1px solid ${borderSubtle}`,
+              borderBottom: `1px solid ${borderSubtle}`,
+              padding: '20px 24px 28px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+            }}
+          >
+            <a href="#about" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>About</a>
+            <a href="#features" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>Features</a>
+            <a href="#protocol" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>Protocol</a>
+            <a href="#architecture" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>Architecture</a>
+            <a href="#downloads" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>Downloads</a>
+            <a href="#support" onClick={() => setIsMobileMenuOpen(false)} style={{ fontSize: '15px', fontWeight: 600, color: textPrimary, textDecoration: 'none', padding: '6px 0' }}>Support</a>
+
+            <div style={{ height: '1px', backgroundColor: borderSubtle, margin: '6px 0' }} />
+
+            <div style={{ display: 'flex', gap: '10px', flexDirection: 'column' }}>
+              <a
+                href="/downloads/AuraDrop-Setup.exe"
+                download="AuraDrop-Setup.exe"
+                onClick={() => setIsMobileMenuOpen(false)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  padding: '12px 20px',
+                  borderRadius: '12px',
+                  backgroundColor: isDark ? '#ffffff' : '#0f172a',
+                  color: isDark ? '#000000' : '#ffffff',
+                  fontWeight: 700,
+                  textDecoration: 'none',
+                  fontSize: '14px',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+                Download for Windows (Setup.exe)
+              </a>
+
+              <a
+                href="/downloads/AuraDrop-Android.apk"
+                download="AuraDrop-Android.apk"
+                onClick={() => setIsMobileMenuOpen(false)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '8px',
+                  padding: '12px 20px',
+                  borderRadius: '12px',
+                  backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#f1f5f9',
+                  border: `1px solid ${borderSubtle}`,
+                  color: textPrimary,
+                  fontWeight: 700,
+                  textDecoration: 'none',
+                  fontSize: '14px',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/></svg>
+                Download for Android (Direct APK)
+              </a>
+            </div>
+          </div>
+        )}
       </header>
 
       {/* ══════════════════════════════════════════════════════════════════════════
@@ -490,12 +713,12 @@ export const App: React.FC = () => {
         id="about"
         style={{
           position: 'relative',
-          padding: '80px 0 50px',
+          padding: windowWidth < 640 ? '48px 0 36px' : '80px 0 50px',
           textAlign: 'center',
           overflow: 'hidden',
         }}
       >
-        <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
+        <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
           <AnimatedContent distance={30} duration={0.8} threshold={0.05}>
             {/* Bold Contrast Logo Badge (Always 100% Boldly Visible) */}
             <div
@@ -526,8 +749,9 @@ export const App: React.FC = () => {
               />
             </div>
 
-            {/* Protocol Badge */}
-            <div style={{ marginBottom: '18px' }}>
+            {/* Protocol & Live Status Badge Row */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', flexWrap: 'wrap', marginBottom: '18px' }}>
+              <LiveStatusPill peerCount={peers.length} onClick={() => setIsDiagnosticsOpen(true)} isDark={isDark} />
               <span
                 style={{
                   display: 'inline-flex',
@@ -542,15 +766,15 @@ export const App: React.FC = () => {
                   color: textMuted,
                 }}
               >
-                <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#16a34a' }} />
-                AuraDrop Protocol v2.0.1 · Zero Cloud Relay
+                <span>Zero Cloud Relay · P2P</span>
               </span>
             </div>
 
             {/* Main Headline */}
             <h1
+              className="balanced-headline"
               style={{
-                fontSize: 'clamp(38px, 5.4vw, 68px)',
+                fontSize: 'clamp(32px, 5.4vw, 68px)',
                 fontWeight: 800,
                 letterSpacing: '-0.04em',
                 lineHeight: 1.1,
@@ -567,7 +791,7 @@ export const App: React.FC = () => {
             {/* Subtitle */}
             <p
               style={{
-                fontSize: 'clamp(16px, 1.8vw, 20px)',
+                fontSize: 'clamp(15px, 1.8vw, 20px)',
                 color: textMuted,
                 maxWidth: '660px',
                 margin: '0 auto 36px',
@@ -581,11 +805,12 @@ export const App: React.FC = () => {
 
             {/* Hero Action Buttons - Clean Minimal Pill Buttons */}
             <div
+              className="hero-btn-container"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '16px',
+                gap: '14px',
                 flexWrap: 'wrap',
                 marginBottom: '44px',
               }}
@@ -602,15 +827,14 @@ export const App: React.FC = () => {
               </a>
 
               <a
-                href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="/downloads/AuraDrop-Android.apk"
+                download="AuraDrop-Android.apk"
                 className="hero-ghost-btn cursor-pointer"
               >
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/>
                 </svg>
-                <span>Android APK</span>
+                <span>Download Android APK</span>
               </a>
 
               <button
@@ -715,7 +939,7 @@ export const App: React.FC = () => {
             {/* Window Content */}
             <div
               style={{
-                padding: '38px 28px 44px',
+                padding: windowWidth < 640 ? '24px 14px 30px' : '38px 28px 44px',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -728,12 +952,15 @@ export const App: React.FC = () => {
                   backgroundColor: 'rgba(24, 24, 32, 0.95)',
                   border: '1px solid rgba(255, 255, 255, 0.14)',
                   borderRadius: '9999px',
-                  padding: '9px 20px',
+                  padding: windowWidth < 480 ? '7px 14px' : '9px 20px',
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: '12px',
+                  gap: '10px',
                   boxShadow: '0 12px 35px rgba(0, 0, 0, 0.75)',
                   marginBottom: '26px',
+                  maxWidth: '100%',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
                 }}
               >
                 <div
@@ -743,9 +970,10 @@ export const App: React.FC = () => {
                     borderRadius: '50%',
                     backgroundColor: '#34C759',
                     animation: 'pulseDot 1.8s ease-in-out infinite',
+                    flexShrink: 0,
                   }}
                 />
-                <span style={{ fontSize: '13px', fontWeight: 600, color: '#FFFFFF' }}>
+                <span style={{ fontSize: windowWidth < 480 ? '11px' : '13px', fontWeight: 600, color: '#FFFFFF', textAlign: 'center' }}>
                   {selectedPeer
                     ? `${selectedPeer.name} Connected · Direct LAN Turbo`
                     : 'Pixel 9 Pro Connected · Direct LAN Turbo'}
@@ -773,7 +1001,7 @@ export const App: React.FC = () => {
                   onSelectPeer={(p) => setSelectedPeer(p)}
                   isTransferring={false}
                   transferSpeed="67.7 MB/s"
-                  size={240}
+                  size={windowWidth < 480 ? 190 : 240}
                 />
               </div>
 
@@ -886,49 +1114,49 @@ export const App: React.FC = () => {
            FEATURES SECTION
       ══════════════════════════════════════════════════════════════════════════ */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
-        <section id="features" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
-          <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
-            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
+        <section id="features" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
+          <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
+            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 40px auto' }}>
               <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Engine Capabilities
               </div>
-              <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
+              <h2 style={{ fontSize: 'clamp(28px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
                 Engineered for pure local velocity.
               </h2>
-              <p style={{ fontSize: '17px', color: textMuted, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 'clamp(15px, 1.6vw, 17px)', color: textMuted, lineHeight: 1.6 }}>
                 AuraDrop bypasses public cloud intermediaries and streams data directly over high-speed local network sockets, Wi-Fi 6/7, and WebRTC data channels.
               </p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '24px' }}>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div className="features-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: '20px' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>01 / SPEED</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>100+ MB/s LAN Streaming</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>100+ MB/s LAN Streaming</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Direct TCP and HTTP chunked streams transfer raw bytes at the physical throughput limit of your local router without uploading to any external server.</p>
               </TiltCard>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>02 / ZERO-CONFIG</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Seamless Auto-Discovery</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>Seamless Auto-Discovery</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>UDP Multicast announcements detect phones and PCs on the same Wi-Fi instantly. No Bluetooth pairing pins, no login credentials, and no setup friction.</p>
               </TiltCard>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>03 / SECURITY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Fail-Closed Authentication</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>Fail-Closed Authentication</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Single-use cryptographic upload tokens expire in 60 seconds and invalidate immediately upon transfer initiation. Spoofed device IDs receive immediate 403s.</p>
               </TiltCard>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>04 / INTEGRITY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>SHA-256 Byte Verification</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>SHA-256 Byte Verification</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Receivers calculate streaming SHA-256 checksums incrementally. Files with mismatched hashes or truncated bytes are automatically rejected.</p>
               </TiltCard>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>05 / PRIVACY</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Zero Cloud Staging</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>Zero Cloud Staging</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Files stream device-to-device directly over LAN sockets. Signaling relays negotiate WebRTC handshakes only and never touch raw file bytes.</p>
               </TiltCard>
-              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard className="feature-card" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: windowWidth < 640 ? '22px 18px' : '28px 24px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 700, color: textMuted, marginBottom: '16px', letterSpacing: '0.08em' }}>06 / MESSAGING</div>
-                <h3 style={{ fontSize: '20px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: '52px', display: 'flex', alignItems: 'flex-start' }}>Encrypted P2P Chat</h3>
+                <h3 style={{ fontSize: '19px', fontWeight: 700, color: textPrimary, marginBottom: '10px', minHeight: windowWidth < 640 ? 'auto' : '52px', display: 'flex', alignItems: 'flex-start' }}>Encrypted P2P Chat</h3>
                 <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, margin: 0 }}>Send instant messages, code snippets, and clipboard links across devices securely with zero server retention or third-party storage.</p>
               </TiltCard>
             </div>
@@ -940,40 +1168,40 @@ export const App: React.FC = () => {
            PROTOCOL SECTION
       ══════════════════════════════════════════════════════════════════════════ */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
-        <section id="protocol" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
-          <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
-            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
+        <section id="protocol" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
+          <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
+            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 40px auto' }}>
               <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Wire Protocol Flow
               </div>
-              <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
+              <h2 style={{ fontSize: 'clamp(28px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
                 How AuraDrop transfers work.
               </h2>
-              <p style={{ fontSize: '17px', color: textMuted, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 'clamp(15px, 1.6vw, 17px)', color: textMuted, lineHeight: 1.6 }}>
                 Four deterministic stages guarantee private, zero-latency transfers across any combination of operating systems.
               </p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '20px' }}>
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>1</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>LAN Discovery</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Devices announce presence via UDP multicast on port 53317. Peer IP addresses and capabilities are resolved instantly.</p>
+            <div className="protocol-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: '16px' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '16px' }}>1</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '26px' }}>LAN Discovery</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0 }}>Devices announce presence via UDP multicast on port 53317. Peer IP addresses and capabilities are resolved instantly.</p>
               </TiltCard>
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>2</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Token Handshake</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral 60s key.</p>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '16px' }}>2</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '26px' }}>Token Handshake</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0 }}>Sender requests a single-use authorization token. The receiver verifies sender identity and derives an ephemeral 60s key.</p>
               </TiltCard>
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>3</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Direct Streaming</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Bytes stream directly over high-throughput local sockets or WebRTC data channels, utilizing 100% of available LAN bandwidth.</p>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '16px' }}>3</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '26px' }}>Direct Streaming</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0 }}>Bytes stream directly over high-throughput local sockets or WebRTC data channels, utilizing 100% of available LAN bandwidth.</p>
               </TiltCard>
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '18px' }}>4</div>
-                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '26px' }}>Checksum Audit</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>The receiver verifies exact byte length and SHA-256 hash before flushing the file to disk or the Android MediaStore gallery.</p>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px 24px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: isDark ? 'rgba(255,255,255,0.1)' : '#0f172a', color: '#ffffff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '13px', marginBottom: '16px' }}>4</div>
+                <h4 style={{ fontSize: '17px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '26px' }}>Checksum Audit</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0 }}>The receiver verifies exact byte length and SHA-256 hash before flushing the file to disk or the Android MediaStore gallery.</p>
               </TiltCard>
             </div>
           </div>
@@ -1250,9 +1478,9 @@ export const App: React.FC = () => {
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: 'auto' }}>
                     <a
-                      href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      href="/downloads/AuraDrop-Android.apk"
+                      download="AuraDrop-Android.apk"
+                      onClick={() => analytics.track('download_apk')}
                       className="cursor-pointer"
                       style={{
                         display: 'flex',
@@ -1273,7 +1501,7 @@ export const App: React.FC = () => {
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                         Download Direct APK
                       </span>
-                      <span style={{ opacity: 0.85, fontSize: '13px' }}>113.7 MB</span>
+                      <span style={{ opacity: 0.85, fontSize: '13px' }}>49.5 MB</span>
                     </a>
                     <a
                       href="https://github.com/JACK-AI7/AuraDrop/releases"
@@ -1641,22 +1869,107 @@ export const App: React.FC = () => {
               </p>
             </div>
 
-            <ul style={{ display: 'flex', gap: '52px', listStyle: 'none', padding: 0 }}>
-              <li><a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">GitHub</a></li>
-              <li><a href="https://github.com/JACK-AI7/AuraDrop/releases" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Releases</a></li>
-              <li><a href="https://github.com/JACK-AI7/AuraDrop/issues" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Issues</a></li>
-              <li><a href="https://github.com/JACK-AI7/AuraDrop/blob/main/README.md" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Documentation</a></li>
-            </ul>
+            <div style={{ display: 'flex', gap: '44px', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: textPrimary, marginBottom: '14px' }}>Navigation</div>
+                <ul style={{ display: 'flex', flexDirection: 'column', gap: '10px', listStyle: 'none', padding: 0 }}>
+                  <li><a href="#about" className="nav-link cursor-pointer">About</a></li>
+                  <li><a href="#features" className="nav-link cursor-pointer">Features</a></li>
+                  <li><a href="#protocol" className="nav-link cursor-pointer">Protocol</a></li>
+                  <li><a href="#architecture" className="nav-link cursor-pointer">Architecture</a></li>
+                  <li><a href="#downloads" className="nav-link cursor-pointer">Downloads</a></li>
+                  <li><a href="#support" className="nav-link cursor-pointer">Support</a></li>
+                </ul>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: textPrimary, marginBottom: '14px' }}>Legal &amp; DPDP</div>
+                <ul style={{ display: 'flex', flexDirection: 'column', gap: '10px', listStyle: 'none', padding: 0 }}>
+                  <li>
+                    <button
+                      onClick={() => { setLegalTab('privacy'); setIsLegalOpen(true); }}
+                      className="nav-link cursor-pointer"
+                      style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit' }}
+                    >
+                      Privacy Policy (DPDP)
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => { setLegalTab('terms'); setIsLegalOpen(true); }}
+                      className="nav-link cursor-pointer"
+                      style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit' }}
+                    >
+                      Terms &amp; Conditions
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => { setLegalTab('cookies'); setIsLegalOpen(true); }}
+                      className="nav-link cursor-pointer"
+                      style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit' }}
+                    >
+                      Cookie Policy
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => { setLegalTab('refund'); setIsLegalOpen(true); }}
+                      className="nav-link cursor-pointer"
+                      style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit' }}
+                    >
+                      Refund Policy
+                    </button>
+                  </li>
+                  <li>
+                    <button
+                      onClick={() => { setLegalTab('cookies'); setIsLegalOpen(true); }}
+                      className="nav-link cursor-pointer"
+                      style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', font: 'inherit', color: '#60a5fa' }}
+                    >
+                      Cookie Settings ⚙️
+                    </button>
+                  </li>
+                </ul>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: textPrimary, marginBottom: '14px' }}>Community &amp; Source</div>
+                <ul style={{ display: 'flex', flexDirection: 'column', gap: '10px', listStyle: 'none', padding: 0 }}>
+                  <li><a href="https://github.com/JACK-AI7/AuraDrop" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">GitHub Repository</a></li>
+                  <li><a href="https://github.com/JACK-AI7/AuraDrop/releases" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Official Releases</a></li>
+                  <li><a href="https://github.com/JACK-AI7/AuraDrop/issues" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Security &amp; Issues</a></li>
+                  <li><a href="https://github.com/JACK-AI7/AuraDrop/blob/main/README.md" target="_blank" rel="noopener noreferrer" className="nav-link cursor-pointer">Documentation</a></li>
+                </ul>
+              </div>
+            </div>
           </div>
 
-          <div style={{ marginTop: '50px', paddingTop: '24px', borderTop: `1px solid ${borderSubtle}`, display: 'flex', justifyContent: 'space-between', fontSize: '12px', color: textMuted }}>
-            <span>© 2026 AuraDrop. Open source under the MIT License. Created by B. Jaswanth Reddy.</span>
-            <span>Version 2.0.1</span>
+          <div style={{ marginTop: '50px', paddingTop: '24px', borderTop: `1px solid ${borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: textMuted }}>
+            <span>© 2026 AuraDrop. Open source under the MIT License. Developed by B. Jaswanth Reddy · DPDP Act 2023 Compliant.</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+              <button
+                onClick={() => setIsCommandMenuOpen(true)}
+                style={{
+                  background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9',
+                  border: `1px solid ${borderSubtle}`,
+                  borderRadius: '6px',
+                  padding: '3px 8px',
+                  color: textMuted,
+                  fontSize: '11px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                Press ⌘K for Commands
+              </button>
+              <span className="tabular-nums">Version 2.0.1</span>
+            </div>
           </div>
         </div>
       </footer>
 
-      {/* MODALS */}
+      {/* MODALS & OVERLAYS */}
       <DevicePairModal
         isOpen={isPairModalOpen}
         onClose={() => setIsPairModalOpen(false)}
@@ -1683,6 +1996,34 @@ export const App: React.FC = () => {
         onClose={() => setIsProfileOpen(false)}
         deviceName={engine.localName}
       />
+      <LegalModal
+        isOpen={isLegalOpen}
+        onClose={() => setIsLegalOpen(false)}
+        initialTab={legalTab}
+      />
+      <CookieConsentBanner
+        onOpenPolicy={() => {
+          setLegalTab('cookies');
+          setIsLegalOpen(true);
+        }}
+      />
+      <CommandMenu
+        isOpen={isCommandMenuOpen}
+        onClose={() => setIsCommandMenuOpen(false)}
+        onOpenDownloads={() => setIsDownloadsOpen(true)}
+        onOpenPairing={() => setIsPairModalOpen(true)}
+        onOpenHistory={() => setIsHistoryOpen(true)}
+        onOpenChat={() => setIsChatOpen(true)}
+        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenLegal={(tab) => {
+          setLegalTab(tab);
+          setIsLegalOpen(true);
+        }}
+        onToggleTheme={() => setTheme(isDark ? 'light' : 'dark')}
+        isDark={isDark}
+      />
+      <ToastNotification toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 };

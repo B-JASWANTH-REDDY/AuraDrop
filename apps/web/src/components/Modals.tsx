@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { PeerDevice, PickedFile, VisibilityMode, TransferRecord } from '../types';
 import { DiagnosticsView } from './DiagnosticsView';
 
@@ -15,10 +15,24 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
   onClose,
   children,
 }) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
       style={{
         position: 'fixed',
         inset: 0,
@@ -869,9 +883,8 @@ export const DownloadsModal: React.FC<{
           </p>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <a
-              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Setup.exe"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/downloads/AuraDrop-Setup.exe"
+              download="AuraDrop-Setup.exe"
               style={{
                 flex: 1,
                 minWidth: '160px',
@@ -887,13 +900,12 @@ export const DownloadsModal: React.FC<{
                 justifyContent: 'space-between',
               }}
             >
-              <span>Download .exe</span>
+              <span>Download .exe (Direct)</span>
               <span style={{ fontSize: '11px', opacity: 0.7 }}>5.96 MB</span>
             </a>
             <a
-              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Windows.msi"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/downloads/AuraDrop-Windows.msi"
+              download="AuraDrop-Windows.msi"
               style={{
                 background: '#24242A',
                 color: '#FFFFFF',
@@ -908,9 +920,8 @@ export const DownloadsModal: React.FC<{
               MSI (9.25 MB)
             </a>
             <a
-              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Windows.zip"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/downloads/AuraDrop-Windows.zip"
+              download="AuraDrop-Windows.zip"
               style={{
                 background: '#24242A',
                 color: '#FFFFFF',
@@ -944,13 +955,13 @@ export const DownloadsModal: React.FC<{
           <p style={{ fontSize: '12px', color: '#A1A1AA', lineHeight: '1.5', marginBottom: '14px' }}>
             Flutter client with native Dynamic Island, local LAN HTTP socket server, SHA-256 streaming verification, and direct peer-to-peer messaging.
           </p>
-          <div style={{ display: 'flex', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <a
-              href="https://github.com/JACK-AI7/AuraDrop/releases/download/v2.0.1/AuraDrop-Android.apk"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/downloads/AuraDrop-Android.apk"
+              download="AuraDrop-Android.apk"
               style={{
                 flex: 1,
+                minWidth: '180px',
                 background: '#FFFFFF',
                 color: '#000000',
                 borderRadius: '10px',
@@ -963,13 +974,12 @@ export const DownloadsModal: React.FC<{
                 justifyContent: 'space-between',
               }}
             >
-              <span>Download APK</span>
-              <span style={{ fontSize: '11px', opacity: 0.7 }}>113.7 MB</span>
+              <span>Download Direct APK</span>
+              <span style={{ fontSize: '11px', opacity: 0.7 }}>49.5 MB</span>
             </a>
             <a
-              href="https://github.com/JACK-AI7/AuraDrop/releases"
-              target="_blank"
-              rel="noopener noreferrer"
+              href="/downloads/AuraDrop-Linux.zip"
+              download="AuraDrop-Linux.zip"
               style={{
                 background: '#24242A',
                 color: '#FFFFFF',
@@ -981,7 +991,23 @@ export const DownloadsModal: React.FC<{
                 textDecoration: 'none',
               }}
             >
-              Releases ↗
+              Linux (.zip)
+            </a>
+            <a
+              href="/downloads/AuraDrop-macOS.zip"
+              download="AuraDrop-macOS.zip"
+              style={{
+                background: '#24242A',
+                color: '#FFFFFF',
+                border: '1px solid #33333C',
+                borderRadius: '10px',
+                padding: '9px 14px',
+                fontSize: '12px',
+                fontWeight: 700,
+                textDecoration: 'none',
+              }}
+            >
+              macOS (.zip)
             </a>
           </div>
         </div>

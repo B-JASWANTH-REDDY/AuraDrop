@@ -1,0 +1,21 @@
+{
+  "name": "AuraDrop — Peer-to-Peer File Sharing",
+  "short_name": "AuraDrop",
+  "description": "High-speed, zero-relay local peer-to-peer file sharing and instant messaging.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060608",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

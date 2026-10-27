@@ -20,5 +20,5 @@ scratch/
 target/
 **/target/
 *.apk
-public/downloads/*.apk
-apps/web/public/downloads/*.apk
+!public/downloads/AuraDrop-Android.apk
+!apps/web/public/downloads/AuraDrop-Android.apk

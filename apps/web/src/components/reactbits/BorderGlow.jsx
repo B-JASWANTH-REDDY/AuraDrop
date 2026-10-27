@@ -115,7 +115,8 @@ const BorderGlow = ({
     card.style.setProperty('--edge-proximity', `${(edge * 100).toFixed(3)}`);
     card.style.setProperty('--cursor-angle', `${angle.toFixed(3)}deg`);
 
-    // Interactive 3D tilt & elevation response to cursor motion
+    // Interactive 3D tilt & elevation response to cursor motion (mouse only)
+    if (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return;
     const rotX = ((y - rect.height / 2) / (rect.height / 2)) * -5;
     const rotY = ((x - rect.width / 2) / (rect.width / 2)) * 5;
     card.style.transform = `perspective(1000px) rotateX(${rotX.toFixed(2)}deg) rotateY(${rotY.toFixed(2)}deg) translateY(-4px)`;
