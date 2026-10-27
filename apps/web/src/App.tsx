@@ -6,9 +6,7 @@ import { CookieConsentBanner } from './components/CookieConsentBanner';
 import { CommandMenu } from './components/CommandMenu';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
 import { analytics } from './engine/analytics';
-import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
-import { TransferStorage } from './engine/transferStorage';
-import { PeerDevice, PickedFile, TransferProgress, TransferRecord, VisibilityMode } from './types';
+import { PeerDevice } from './types';
 
 // React Bits Suite
 import BorderGlow from './components/reactbits/BorderGlow';
@@ -62,10 +60,13 @@ const TiltCard: React.FC<{
   );
 };
 
-export const App: React.FC = () => {
-  const engine = TransferEngine.getInstance();
-  const storage = TransferStorage.getInstance();
+const DEMO_PEERS: PeerDevice[] = [
+  { id: 'demo-1', name: 'Pixel 9 Pro', platform: 'android', connectionState: 'READY_TO_TRANSFER', ip: '192.168.1.12' },
+  { id: 'demo-2', name: 'Surface Studio', platform: 'windows', connectionState: 'CONNECTED', ip: '192.168.1.15' },
+  { id: 'demo-3', name: 'Chrome on macOS', platform: 'web', connectionState: 'CONNECTED', ip: '192.168.1.24' },
+];
 
+export const App: React.FC = () => {
   // Screen width for reactive mobile layout
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1200);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -80,18 +81,9 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const isDark = theme === 'dark';
 
-  // Navigation tab state
-  const [visibility, setVisibility] = useState<VisibilityMode>('everyone');
-
-  // Real Discovered Peers from TransferEngine
-  const [peers, setPeers] = useState<PeerDevice[]>([]);
-  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(null);
-
-  // Active Real Transfer Progress
-  const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null);
-
-  // Transfer History
-  const [transferHistory, setTransferHistory] = useState<TransferRecord[]>(() => storage.getHistory());
+  // Discovered Peers for Interactive Showcase Demo
+  const [peers] = useState<PeerDevice[]>(DEMO_PEERS);
+  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(DEMO_PEERS[0]);
 
   // Copy UPI state & Support Tier
   const [copiedUpi, setCopiedUpi] = useState(false);
@@ -161,59 +153,6 @@ export const App: React.FC = () => {
   // Window preview ref for smooth scroll
   const windowPreviewRef = useRef<HTMLDivElement>(null);
 
-  // ---------------------------------------------------------------------------
-  // SUBSCRIBE TO REAL ENGINE EVENTS
-  // ---------------------------------------------------------------------------
-  useEffect(() => {
-    const unsubscribePeers = engine.onPeersUpdated((updatedPeers) => {
-      setPeers(updatedPeers);
-      setSelectedPeer((prev) => {
-        const androidPeer = updatedPeers.find((p) => p.platform === 'android');
-        if (androidPeer) return androidPeer;
-        if (!prev) return updatedPeers[0] || null;
-        const exists = updatedPeers.find((p) => p.id === prev.id);
-        return exists || updatedPeers[0] || null;
-      });
-    });
-
-    const unsubscribeEvents = engine.onEngineEvent((evt: TransferEngineEvent) => {
-      if (evt.type === 'progress') {
-        setTransferProgress({
-          transferId: evt.transferId,
-          fileName: evt.fileName,
-          fileSize: evt.fileSize,
-          transferredBytes: evt.transferredBytes || 0,
-          verifiedBytes: evt.verifiedBytes || 0,
-          speedBytesPerSec: evt.speedBytesPerSec || 0,
-          etaSeconds: evt.etaSeconds || 0,
-          state: evt.state || 'TRANSFERRING',
-          isIncoming: evt.transferredBytes !== undefined,
-          peerName: evt.senderName,
-          transport: evt.transport || 'Direct LAN',
-          sha256: evt.sha256,
-        });
-      } else if (evt.type === 'completed') {
-        setTransferProgress((prev) =>
-          prev
-            ? {
-                ...prev,
-                state: 'COMPLETED',
-                transferredBytes: prev.fileSize,
-                verifiedBytes: prev.fileSize,
-              }
-            : null
-        );
-        setTransferHistory(storage.getHistory());
-      } else if (evt.type === 'failed') {
-        setTransferProgress((prev) => (prev ? { ...prev, state: 'FAILED' } : null));
-      }
-    });
-
-    return () => {
-      unsubscribePeers();
-      unsubscribeEvents();
-    };
-  }, [engine, storage]);
 
   // Handle Copy UPI ID
   const handleCopyUpi = () => {
@@ -456,11 +395,6 @@ export const App: React.FC = () => {
 
           {/* Right Action Buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-            {/* Live Signaling Status Indicator */}
-            <div className="desktop-nav" style={{ flexShrink: 0 }}>
-              <LiveStatusPill peerCount={peers.length} onClick={() => setIsDiagnosticsOpen(true)} isDark={isDark} />
-            </div>
-
             {/* Quick Find (⌘K) Command Menu Trigger */}
             <button
               onClick={() => setIsCommandMenuOpen(true)}
