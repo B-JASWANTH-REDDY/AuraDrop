@@ -438,6 +438,14 @@ pub async fn open_chat_window(app: tauri::AppHandle, peer_id: String) -> Result<
 pub async fn set_island_size(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
     if let Some(island) = app.get_webview_window("island") {
         let _ = island.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
+        if let Ok(Some(monitor)) = island.primary_monitor() {
+            let screen_size = monitor.size();
+            let scale = monitor.scale_factor();
+            let w = (width * scale) as i32;
+            let x = ((screen_size.width as i32) - w) / 2;
+            let y = (14.0 * scale) as i32;
+            let _ = island.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+        }
     }
     Ok(())
 }

@@ -94,10 +94,13 @@ pub struct PrepareUploadRequest {
     pub file_id: Option<String>,
     pub file_name: String,
     pub file_size: u64,
+    #[serde(default)]
     pub sha256: String,
+    #[serde(default, alias = "senderId")]
     pub sender_user_id: String,
     #[serde(default, alias = "senderName")]
     pub sender_name: Option<String>,
+    #[serde(default, alias = "receiverId")]
     pub receiver_user_id: Option<String>,
     #[serde(default)]
     pub supported_protocols: Option<Vec<String>>,

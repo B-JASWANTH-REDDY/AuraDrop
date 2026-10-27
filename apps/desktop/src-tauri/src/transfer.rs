@@ -695,55 +695,38 @@ async fn handle_prepare_upload(
         ));
     }
 
-    let sender_eph_hex = match payload.sender_eph_pub_key.as_ref() {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing ephemeral ECDH public key. Authenticated encryption required."})),
-            ));
-        }
-    };
-    let sender_identity_hex = match payload.sender_identity_pub_key.as_ref() {
-        Some(k) if !k.is_empty() => k,
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing sender identity public key. Authenticated key exchange required."})),
-            ));
-        }
-    };
-    let sender_sig_hex = match payload.sender_signature.as_ref() {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "Missing sender cryptographic signature. Authenticated key exchange required."})),
-            ));
-        }
-    };
+    let has_crypto = payload.sender_eph_pub_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        && payload.sender_identity_pub_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+        && payload.sender_signature.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
 
-    // Verify sender signature over sender transcript and validate against Trust Store
-    let sender_transcript = crate::crypto::compute_sender_transcript(
-        "auradrop/tcp/2",
-        &payload.transfer_id,
-        &payload.sender_user_id,
-        sender_eph_hex,
-    );
-    let is_first_contact = match service.identity.verify_peer_handshake(
-        &payload.sender_user_id,
-        sender_identity_hex,
-        &sender_transcript,
-        sender_sig_hex,
-    ).await {
-        Ok(first) => first,
-        Err(e) => {
-            crate::log_debug(&format!("[PrepareUpload] Authentication failed: {}", e));
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": format!("Sender cryptographic authentication failed: {}", e)})),
-            ));
-        }
+    let (is_first_contact, sender_eph_hex, sender_identity_hex) = if has_crypto {
+        let eph = payload.sender_eph_pub_key.as_ref().unwrap();
+        let id_pub = payload.sender_identity_pub_key.as_ref().unwrap();
+        let sig = payload.sender_signature.as_ref().unwrap();
+        let sender_transcript = crate::crypto::compute_sender_transcript(
+            "auradrop/tcp/2",
+            &payload.transfer_id,
+            &payload.sender_user_id,
+            eph,
+        );
+        let first = match service.identity.verify_peer_handshake(
+            &payload.sender_user_id,
+            id_pub,
+            &sender_transcript,
+            sig,
+        ).await {
+            Ok(f) => f,
+            Err(e) => {
+                crate::log_debug(&format!("[PrepareUpload] Authentication failed: {}", e));
+                return Err((
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": format!("Sender cryptographic authentication failed: {}", e)})),
+                ));
+            }
+        };
+        (first, eph.clone(), id_pub.clone())
+    } else {
+        (false, String::new(), String::new())
     };
 
     let token = Uuid::new_v4().to_string();
@@ -752,38 +735,40 @@ async fn handle_prepare_upload(
     let my_id = service.identity.get_device_id().await;
     let my_identity_pub_hex = service.identity.get_public_key_hex();
 
-    // Receiver generates ephemeral key and agrees with sender
-    let sender_pub_bytes = hex::decode(sender_eph_hex).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("Invalid sender ephemeral key hex: {}", e)})),
-        )
-    })?;
-    let receiver_eph = crate::crypto::EphemeralKeyExchange::generate().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("Receiver ECDH keygen error: {}", e)})),
-        )
-    })?;
-    let receiver_eph_pub_hex = receiver_eph.public_key_hex();
-    let shared_secret = receiver_eph.complete(&sender_pub_bytes).map_err(|e| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": format!("ECDH agreement error: {}", e)})),
-        )
-    })?;
-
-    // Compute SAS verification code bound to the ECDH shared secret and both device identities
-    let sas_code = crate::crypto::compute_sas_code(
-        &shared_secret,
-        &payload.transfer_id,
-        &payload.sender_user_id,
-        &my_id,
-        sender_identity_hex,
-        &my_identity_pub_hex,
-        sender_eph_hex,
-        &receiver_eph_pub_hex,
-    );
+    let (receiver_eph_pub_hex, shared_secret, sas_code) = if has_crypto {
+        let sender_pub_bytes = hex::decode(&sender_eph_hex).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("Invalid sender ephemeral key hex: {}", e)})),
+            )
+        })?;
+        let receiver_eph = crate::crypto::EphemeralKeyExchange::generate().map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Receiver ECDH keygen error: {}", e)})),
+            )
+        })?;
+        let rec_eph_pub = receiver_eph.public_key_hex();
+        let secret = receiver_eph.complete(&sender_pub_bytes).map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": format!("ECDH agreement error: {}", e)})),
+            )
+        })?;
+        let sas = crate::crypto::compute_sas_code(
+            &secret,
+            &payload.transfer_id,
+            &payload.sender_user_id,
+            &my_id,
+            &sender_identity_hex,
+            &my_identity_pub_hex,
+            &sender_eph_hex,
+            &rec_eph_pub,
+        );
+        (Some(rec_eph_pub), secret, Some(sas))
+    } else {
+        (None, vec![0u8; 32], None)
+    };
 
     // Register oneshot channel for interactive user authorization (Accept / Decline)
     let (decision_tx, decision_rx) = tokio::sync::oneshot::channel::<bool>();
@@ -855,7 +840,7 @@ async fn handle_prepare_upload(
             "[PrepareUpload] Inbound first contact from sender {} - Trust established upon user acceptance",
             payload.sender_user_id
         ));
-        let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, sender_identity_hex).await;
+        let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, &sender_identity_hex).await;
     }
 
     service.emit_progress(TransferProgressPayload {
@@ -875,33 +860,36 @@ async fn handle_prepare_upload(
         is_first_contact: None,
     }).await;
 
-    let directional = crate::crypto::derive_directional_session_keys(
-        &shared_secret,
-        &payload.transfer_id,
-        &token,
-        &payload.sender_user_id,
-        &my_id,
-        sender_identity_hex,
-        &my_identity_pub_hex,
-    );
-    let session_key = directional.sender_to_receiver;
-
-    // Receiver signs receiver transcript
-    let receiver_transcript = crate::crypto::compute_receiver_transcript(
-        "auradrop/tcp/2",
-        &payload.transfer_id,
-        &token,
-        &payload.sender_user_id,
-        &my_id,
-        sender_eph_hex,
-        &receiver_eph_pub_hex,
-    );
-    let receiver_sig_hex = service.identity.sign_transcript(&receiver_transcript).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": format!("Receiver signature generation error: {}", e)})),
-        )
-    })?;
+    let (session_key, receiver_sig_hex) = if has_crypto {
+        let directional = crate::crypto::derive_directional_session_keys(
+            &shared_secret,
+            &payload.transfer_id,
+            &token,
+            &payload.sender_user_id,
+            &my_id,
+            &sender_identity_hex,
+            &my_identity_pub_hex,
+        );
+        let rec_eph_str = receiver_eph_pub_hex.as_deref().unwrap_or("");
+        let receiver_transcript = crate::crypto::compute_receiver_transcript(
+            "auradrop/tcp/2",
+            &payload.transfer_id,
+            &token,
+            &payload.sender_user_id,
+            &my_id,
+            &sender_eph_hex,
+            rec_eph_str,
+        );
+        let sig = service.identity.sign_transcript(&receiver_transcript).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("Receiver signature generation error: {}", e)})),
+            )
+        })?;
+        (directional.sender_to_receiver, Some(sig))
+    } else {
+        ([0u8; 32], None)
+    };
 
     let meta = SessionMetadata {
         transfer_id: payload.transfer_id.clone(),
@@ -913,7 +901,7 @@ async fn handle_prepare_upload(
         sender_name: sender_name.clone(),
         sender_id: payload.sender_user_id.clone(),
         sender_identity_pub_hex: sender_identity_hex.to_string(),
-        sas_code: sas_code.clone(),
+        sas_code: sas_code.clone().unwrap_or_default(),
         is_first_contact,
         is_consumed: false,
         session_key,
@@ -931,7 +919,7 @@ async fn handle_prepare_upload(
         "***".to_string()
     };
     crate::log_debug(&format!(
-        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}, SAS: {}]",
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}, SAS: {:?}]",
         payload.file_name, payload.file_size, sender_name, masked_token, sas_code
     ));
 
@@ -946,12 +934,12 @@ async fn handle_prepare_upload(
         one_time_token: token,
         expires_at,
         protocol: "auradrop/tcp/2".to_string(),
-        encryption: Some("aead-aes256-gcm".to_string()),
+        encryption: if has_crypto { Some("aead-aes256-gcm".to_string()) } else { Some("direct".to_string()) },
         receiver_id: Some(my_id),
-        receiver_eph_pub_key: Some(receiver_eph_pub_hex),
-        receiver_identity_pub_key: Some(my_identity_pub_hex),
-        receiver_signature: Some(receiver_sig_hex),
-        sas_code: Some(sas_code),
+        receiver_eph_pub_key: receiver_eph_pub_hex,
+        receiver_identity_pub_key: if has_crypto { Some(my_identity_pub_hex) } else { None },
+        receiver_signature: receiver_sig_hex,
+        sas_code,
         is_first_contact: Some(is_first_contact),
         quic_port: None,
         cert_fingerprint: None,
@@ -1083,19 +1071,11 @@ async fn handle_upload(
         }
     };
 
-    // Enforce authenticated encryption: plaintext transfers are strictly rejected (Fail Closed)
     let encryption_mode = headers
         .get("x-encryption")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("none");
-    if encryption_mode != "aead-aes256-gcm" {
-        let _ = tokio::fs::remove_file(&temp_file_path).await;
-        service.sessions.write().await.remove(&transfer_id);
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "Plaintext transfer rejected: authenticated encryption (aead-aes256-gcm) is required"})),
-        ));
-    }
+    let is_aead = encryption_mode == "aead-aes256-gcm" && session.session_key != [0u8; 32];
 
     let session_key = session.session_key;
 
@@ -1125,64 +1105,9 @@ async fn handle_upload(
             }
         };
 
-        stream_buf.extend_from_slice(&chunk);
-
-        while stream_buf.len() >= 16 {
-            let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
-            
-            // Validate payload bounds: max 8 MiB chunk + 16-byte tag, min 16-byte tag
-            if payload_len < 16 || payload_len > (8 * 1024 * 1024 + 16) {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
-                service.sessions.write().await.remove(&transfer_id);
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": format!("Frame payload length out of bounds: {} bytes", payload_len)})),
-                ));
-            }
-
-            let total_frame_len = 4 + 12 + payload_len;
-            if stream_buf.len() < total_frame_len {
-                break; // Await more network bytes to complete frame
-            }
-
-            let mut nonce = [0u8; 12];
-            nonce.copy_from_slice(&stream_buf[4..16]);
-
-            // Validate strict sequence numbering to prevent chunk replay, out-of-order, or repeated chunks
-            let chunk_seq = u64::from_be_bytes([
-                nonce[4], nonce[5], nonce[6], nonce[7],
-                nonce[8], nonce[9], nonce[10], nonce[11],
-            ]);
-            if chunk_seq != chunk_index {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
-                service.sessions.write().await.remove(&transfer_id);
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": format!("Chunk sequence violation: received chunk index {}, expected {}", chunk_seq, chunk_index)})),
-                ));
-            }
-
-            let ciphertext_and_tag = &stream_buf[16..total_frame_len];
-            let aad = format!("{}:{}", session.transfer_id, chunk_index);
-
-            let plaintext = match crate::crypto::decrypt_chunk(
-                &session_key,
-                &nonce,
-                aad.as_bytes(),
-                ciphertext_and_tag,
-            ) {
-                Ok(pt) => pt,
-                Err(e) => {
-                    let _ = tokio::fs::remove_file(&temp_file_path).await;
-                    service.sessions.write().await.remove(&transfer_id);
-                    return Err((
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(json!({"error": format!("AEAD integrity authentication failure: {}", e)})),
-                    ));
-                }
-            };
-
-            if let Err(e) = writer.write_all(&plaintext).await {
+        if !is_aead {
+            // High-speed direct streaming: stream raw bytes straight to disk buffer
+            if let Err(e) = writer.write_all(&chunk).await {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
                 service.sessions.write().await.remove(&transfer_id);
                 return Err((
@@ -1190,12 +1115,81 @@ async fn handle_upload(
                     Json(json!({"error": format!("Disk write error: {}", e)})),
                 ));
             }
+            hasher.update(&chunk);
+            transferred += chunk.len() as u64;
+        } else {
+            stream_buf.extend_from_slice(&chunk);
 
-            hasher.update(&plaintext);
-            transferred += plaintext.len() as u64;
-            chunk_index += 1;
+            while stream_buf.len() >= 16 {
+                let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
+                
+                // Validate payload bounds: max 8 MiB chunk + 16-byte tag, min 16-byte tag
+                if payload_len < 16 || payload_len > (8 * 1024 * 1024 + 16) {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    service.sessions.write().await.remove(&transfer_id);
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": format!("Frame payload length out of bounds: {} bytes", payload_len)})),
+                    ));
+                }
 
-            stream_buf.drain(0..total_frame_len);
+                let total_frame_len = 4 + 12 + payload_len;
+                if stream_buf.len() < total_frame_len {
+                    break; // Await more network bytes to complete frame
+                }
+
+                let mut nonce = [0u8; 12];
+                nonce.copy_from_slice(&stream_buf[4..16]);
+
+                // Validate strict sequence numbering to prevent chunk replay, out-of-order, or repeated chunks
+                let chunk_seq = u64::from_be_bytes([
+                    nonce[4], nonce[5], nonce[6], nonce[7],
+                    nonce[8], nonce[9], nonce[10], nonce[11],
+                ]);
+                if chunk_seq != chunk_index {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    service.sessions.write().await.remove(&transfer_id);
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        Json(json!({"error": format!("Chunk sequence violation: received chunk index {}, expected {}", chunk_seq, chunk_index)})),
+                    ));
+                }
+
+                let ciphertext_and_tag = &stream_buf[16..total_frame_len];
+                let aad = format!("{}:{}", session.transfer_id, chunk_index);
+
+                let plaintext = match crate::crypto::decrypt_chunk(
+                    &session_key,
+                    &nonce,
+                    aad.as_bytes(),
+                    ciphertext_and_tag,
+                ) {
+                    Ok(pt) => pt,
+                    Err(e) => {
+                        let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        service.sessions.write().await.remove(&transfer_id);
+                        return Err((
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(json!({"error": format!("AEAD integrity authentication failure: {}", e)})),
+                        ));
+                    }
+                };
+
+                if let Err(e) = writer.write_all(&plaintext).await {
+                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    service.sessions.write().await.remove(&transfer_id);
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error": format!("Disk write error: {}", e)})),
+                    ));
+                }
+
+                hasher.update(&plaintext);
+                transferred += plaintext.len() as u64;
+                chunk_index += 1;
+
+                stream_buf.drain(0..total_frame_len);
+            }
         }
 
         if transferred > session.file_size {

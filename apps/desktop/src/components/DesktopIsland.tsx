@@ -79,12 +79,14 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
       if (['transferring', 'waiting_approval'].includes(state.phase)) {
         return { ...state, peerCount: action.peerCount, peerName: action.peerName || state.peerName };
       }
+      const isNew = action.peerCount > 0 && (state.peerCount === 0 || (action.peerName && action.peerName !== state.peerName));
       const phase: IslandPhase = action.peerCount > 0 ? 'discovering' : 'idle';
       return {
         ...state,
         phase,
+        expanded: isNew ? true : state.expanded,
         peerCount: action.peerCount,
-        peerName: action.peerName,
+        peerName: action.peerName || state.peerName,
       };
     }
 
@@ -263,6 +265,7 @@ export const DesktopIsland: React.FC<{
   useEffect(() => {
     if (!isOverlayWindow) return;
     const isExpanded =
+      state.expanded ||
       state.phase === 'waiting_approval' ||
       state.phase === 'transferring' ||
       state.phase === 'completed' ||
@@ -270,13 +273,14 @@ export const DesktopIsland: React.FC<{
     const targetW = isExpanded ? 460 : 280;
     const targetH = isExpanded ? 310 : 52;
     invoke('set_island_size', { width: targetW, height: targetH }).catch(() => {});
-  }, [state.phase, isOverlayWindow]);
+  }, [state.phase, state.expanded, isOverlayWindow]);
 
   useEffect(() => {
     if (state.phase === 'completed') scheduleCollapse(7000);
     if (state.phase === 'failed') scheduleCollapse(9000);
     if (state.phase === 'message') scheduleCollapse(6000);
-  }, [state.phase, scheduleCollapse]);
+    if (state.phase === 'discovering' && state.expanded) scheduleCollapse(7000);
+  }, [state.phase, state.expanded, scheduleCollapse]);
 
   useEffect(() => {
     // 1. Initial peers probe
@@ -490,26 +494,25 @@ export const DesktopIsland: React.FC<{
         left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 99999,
-        background: 'rgba(10, 10, 12, 0.94)',
-        backdropFilter: 'blur(28px)',
+        background: 'rgba(12, 12, 14, 0.96)',
+        backdropFilter: 'blur(30px)',
         border:
           state.phase === 'waiting_approval'
-            ? '1.5px solid rgba(56, 189, 248, 0.7)'
-            : '1px solid rgba(255, 255, 255, 0.12)',
-        borderRadius: state.expanded ? 24 : 100,
-        boxShadow:
-          state.phase === 'waiting_approval'
-            ? '0 12px 48px rgba(0,0,0,0.85), 0 0 24px rgba(56,189,248,0.3)'
-            : '0 12px 40px rgba(0,0,0,0.75), 0 0 0 .5px rgba(255,255,255,0.06)',
+            ? '1.5px solid rgba(0, 122, 255, 0.7)'
+            : '1px solid rgba(255, 255, 255, 0.14)',
+        borderRadius: state.expanded ? 28 : 100,
+        boxShadow: state.expanded
+          ? '0 24px 64px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.08)'
+          : '0 12px 40px rgba(0,0,0,0.75), 0 0 0 .5px rgba(255,255,255,0.06)',
         cursor: 'pointer',
         userSelect: 'none',
         outline: 'none',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         color: '#fff',
         fontSize: 13,
-        width: state.expanded ? 340 : 'auto',
-        minWidth: state.expanded ? 300 : 110,
-        maxWidth: 380,
+        width: state.expanded ? 420 : 'auto',
+        minWidth: state.expanded ? 400 : 110,
+        maxWidth: 440,
         transition:
           'border-radius .38s cubic-bezier(.34,1.56,.64,1), width .38s cubic-bezier(.34,1.56,.64,1), box-shadow .38s ease',
       }}
@@ -534,7 +537,7 @@ export const DesktopIsland: React.FC<{
                 width: 7,
                 height: 7,
                 borderRadius: '50%',
-                background: '#38BDF8',
+                background: '#007AFF',
                 animation: 'island-pulse 1.2s infinite ease-in-out',
               }}
             />
@@ -548,7 +551,7 @@ export const DesktopIsland: React.FC<{
                 cy="9"
                 r="7"
                 fill="none"
-                stroke="#60A5FA"
+                stroke="#007AFF"
                 strokeWidth={2.2}
                 strokeDasharray={`${(pct / 100) * 44} 44`}
                 strokeLinecap="round"
@@ -571,106 +574,150 @@ export const DesktopIsland: React.FC<{
         </div>
       )}
 
-      {/* ── Expanded AirDrop Card ── */}
+      {/* ── Expanded AirDrop Card (Mobile Layout Parity) ── */}
       {state.expanded && (
-        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {/* Header Row */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
-                <circle cx="12" cy="12" r="3" fill={accentColor()} />
-                <circle cx="12" cy="12" r="6" stroke={accentColor()} strokeWidth="1.6" fill="none" opacity=".7" />
-                <circle cx="12" cy="12" r="10" stroke={accentColor()} strokeWidth="1.1" fill="none" opacity=".4" />
-              </svg>
-              <div>
-                <span style={{ fontWeight: 700, fontSize: 13, color: accentColor() }}>
-                  {state.phase === 'waiting_approval'
-                    ? 'AirDrop Request'
-                    : state.phase === 'transferring'
-                    ? state.isIncoming
-                      ? 'Receiving Files'
-                      : 'Sending Files'
-                    : state.phase === 'completed'
-                    ? 'Transfer Complete'
-                    : state.phase === 'failed'
-                    ? 'Transfer Failed'
-                    : state.phase === 'discovering'
-                    ? `${state.peerCount} Devices Nearby`
-                    : 'AuraDrop'}
-                </span>
-                <span style={{ marginLeft: 6, fontSize: 11, color: '#9CA3AF' }}>
-                  {state.peerName ? `· ${state.peerName}` : ''}
-                </span>
-              </div>
-            </div>
-
-            <button
-              aria-label="Open main app"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenMain();
-              }}
-              style={{
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: 8,
-                color: '#E5E7EB',
-                cursor: 'pointer',
-                fontSize: 12,
-                padding: '4px 8px',
-                fontWeight: 600,
-              }}
-            >
-              Open ↗
-            </button>
-          </div>
-
-          {/* Phase 1: Incoming AirDrop Request Popup (Accept / Decline) */}
-          {state.phase === 'waiting_approval' && (
+        <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {/* Top Row: Icon/Avatar + Details + Preview Thumbnail */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Left: 44x44 AuraDrop Badge */}
             <div
               style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, rgba(37,99,235,0.25), rgba(59,130,246,0.1))',
+                border: '1px solid rgba(59,130,246,0.3)',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-                padding: '10px 12px',
-                background: 'rgba(255,255,255,0.04)',
-                borderRadius: 14,
-                border: '1px solid rgba(255,255,255,0.08)',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
               }}
             >
-              <div style={{ fontSize: 12, color: '#E5E7EB', fontWeight: 500 }}>
-                <span style={{ fontWeight: 700, color: '#fff' }}>{state.peerName}</span> wants to share:
+              <svg width={22} height={22} viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="12" r="3" fill="#38BDF8" />
+                <circle cx="12" cy="12" r="6" stroke="#38BDF8" strokeWidth="1.6" fill="none" opacity=".8" />
+                <circle cx="12" cy="12" r="10" stroke="#38BDF8" strokeWidth="1.2" fill="none" opacity=".4" />
+              </svg>
+            </div>
+
+            {/* Middle: Title, Subtitle, Status */}
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#FFFFFF', lineHeight: 1.2 }}>
+                {state.phase === 'waiting_approval'
+                  ? 'AirDrop'
+                  : state.phase === 'transferring'
+                  ? state.isIncoming ? 'AirDrop Receiving...' : 'AirDrop Sending...'
+                  : state.phase === 'completed'
+                  ? 'Transfer Complete ✓'
+                  : state.phase === 'failed'
+                  ? 'Transfer Failed'
+                  : state.phase === 'discovering'
+                  ? 'AuraDrop Nearby'
+                  : state.phase === 'message'
+                  ? 'AuraDrop Message'
+                  : 'AuraDrop'}
               </div>
               <div
                 style={{
                   fontSize: 13,
-                  color: '#fff',
-                  fontWeight: 600,
+                  color: '#8E8E93',
+                  marginTop: 3,
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
                 }}
               >
-                {state.fileName}
+                {state.phase === 'waiting_approval'
+                  ? `${state.peerName} would like to share "${state.fileName}"`
+                  : state.phase === 'transferring'
+                  ? state.fileName
+                  : state.phase === 'completed'
+                  ? state.fileName
+                  : state.phase === 'failed'
+                  ? (state.errorMessage || 'Transfer failed or interrupted')
+                  : state.phase === 'discovering'
+                  ? `${state.peerName || '1 Device'} • Nearby Device`
+                  : state.phase === 'message'
+                  ? `${state.chatSender}: ${state.chatText}`
+                  : 'Nearby device discovered'}
               </div>
-              <div style={{ fontSize: 11, color: '#9CA3AF' }}>
-                {fmtBytes(state.fileSizeBytes)} • Direct Wi-Fi P2P
+              <div style={{ fontSize: 11, color: '#636366', marginTop: 1 }}>
+                {state.phase === 'waiting_approval' || state.phase === 'transferring'
+                  ? `${fmtBytes(state.fileSizeBytes)} • Direct Wi-Fi`
+                  : state.phase === 'completed'
+                  ? `${fmtBytes(state.fileSizeBytes)} • SHA-256 Verified`
+                  : state.phase === 'discovering'
+                  ? 'Direct Wi-Fi • Ready'
+                  : state.phase === 'message'
+                  ? 'Direct LAN • Chat'
+                  : 'Ready'}
               </div>
+            </div>
 
+            {/* Right: Rounded Square File Preview Thumbnail (48x48) */}
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background: 'rgba(255, 255, 255, 0.06)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                color: '#9CA3AF',
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+              }}
+            >
+              {state.fileName ? state.fileName.split('.').pop()?.slice(0, 4) || 'FILE' : 'P2P'}
+            </div>
+          </div>
 
-              <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          {/* Middle: Transfer Progress Bar (when transferring) */}
+          {state.phase === 'transferring' && (
+            <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ height: 6, background: '#2C2C2E', borderRadius: 9999, overflow: 'hidden' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${pct}%`,
+                    background: 'linear-gradient(90deg, #007AFF, #38BDF8)',
+                    borderRadius: 9999,
+                    transition: 'width .25s ease',
+                  }}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11.5, color: '#8E8E93' }}>
+                  {fmtBytes(state.transferredBytes)} / {fmtBytes(state.fileSizeBytes)} • {pct}%
+                </span>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: '#FFFFFF' }}>
+                  ⚡ {fmtSpeed(state.speedBytesPerSec)}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Action Pill Buttons: Apple Style Full Rounded Pills */}
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            {state.phase === 'waiting_approval' && (
+              <>
                 <button
                   onClick={handleDecline}
                   style={{
                     flex: 1,
-                    padding: '8px 12px',
-                    borderRadius: 10,
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    color: '#D1D5DB',
-                    fontSize: 12,
-                    fontWeight: 600,
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#2C2C2E',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#FFFFFF',
+                    fontSize: 14,
+                    fontWeight: 700,
                     cursor: 'pointer',
+                    transition: 'all 0.15s ease',
                   }}
                 >
                   Decline
@@ -679,152 +726,172 @@ export const DesktopIsland: React.FC<{
                   onClick={handleAccept}
                   style={{
                     flex: 1,
-                    padding: '8px 12px',
-                    borderRadius: 10,
-                    background: '#2563EB',
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#007AFF',
                     border: 'none',
-                    color: '#fff',
-                    fontSize: 12,
+                    color: '#FFFFFF',
+                    fontSize: 14,
                     fontWeight: 700,
                     cursor: 'pointer',
-                    boxShadow: '0 4px 14px rgba(37,99,235,0.4)',
+                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
+                    transition: 'all 0.15s ease',
                   }}
                 >
                   Accept
                 </button>
-              </div>
-            </div>
-          )}
+              </>
+            )}
 
-          {/* Phase 2: Live Transfer Progress */}
-          {state.phase === 'transferring' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div
+            {state.phase === 'transferring' && (
+              <button
+                onClick={handleDecline}
                 style={{
-                  fontSize: 12,
-                  color: '#E5E7EB',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
+                  width: '100%',
+                  height: 36,
+                  borderRadius: 9999,
+                  background: '#2C2C2E',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: '#9CA3AF',
+                  fontSize: 13,
                   fontWeight: 600,
+                  cursor: 'pointer',
                 }}
-                title={state.fileName}
               >
-                {state.fileName || 'Transferring...'}
-              </div>
+                Cancel
+              </button>
+            )}
 
-              {/* Progress Track */}
-              <div style={{ height: 5, background: '#1F2937', borderRadius: 100, overflow: 'hidden' }}>
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${pct}%`,
-                    background: 'linear-gradient(90deg, #3B82F6, #60A5FA)',
-                    borderRadius: 100,
-                    transition: 'width .35s ease',
-                  }}
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#9CA3AF' }}>
-                <span>
-                  {fmtBytes(state.transferredBytes)} / {fmtBytes(state.fileSizeBytes)} ({pct}%)
-                </span>
-                <span>{fmtSpeed(state.speedBytesPerSec)}</span>
-                {state.etaSeconds > 0 && <span>ETA {fmtEta(state.etaSeconds)}</span>}
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
-                <button
-                  onClick={handleDecline}
-                  style={{
-                    padding: '4px 10px',
-                    borderRadius: 6,
-                    background: 'transparent',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    color: '#9CA3AF',
-                    fontSize: 11,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Phase 3: Completed */}
-          {state.phase === 'completed' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ fontSize: 12, color: '#4ADE80', fontWeight: 600 }}>
-                ✓ {state.fileName} ({fmtBytes(state.fileSizeBytes)})
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <button
-                  onClick={handleOpenFile}
-                  style={{
-                    flex: 1,
-                    padding: '7px 10px',
-                    borderRadius: 8,
-                    background: '#fff',
-                    border: 'none',
-                    color: '#000',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Open File
-                </button>
+            {state.phase === 'completed' && (
+              <>
                 <button
                   onClick={handleOpenFolder}
                   style={{
                     flex: 1,
-                    padding: '7px 10px',
-                    borderRadius: 8,
-                    background: 'rgba(255,255,255,0.08)',
-                    border: '1px solid rgba(255,255,255,0.12)',
-                    color: '#fff',
-                    fontSize: 11,
+                    height: 38,
+                    borderRadius: 9999,
+                    background: '#2C2C2E',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#FFFFFF',
+                    fontSize: 13,
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
                 >
                   Open Folder
                 </button>
-              </div>
-            </div>
-          )}
+                <button
+                  onClick={handleOpenFile}
+                  style={{
+                    flex: 1,
+                    height: 38,
+                    borderRadius: 9999,
+                    background: '#007AFF',
+                    border: 'none',
+                    color: '#FFFFFF',
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.35)',
+                  }}
+                >
+                  Open File
+                </button>
+              </>
+            )}
 
-          {/* Phase 4: Failed */}
-          {state.phase === 'failed' && (
-            <div style={{ fontSize: 12, color: '#F87171', fontWeight: 500 }}>
-              {state.errorMessage || 'Transfer was interrupted or failed'}
-            </div>
-          )}
+            {state.phase === 'discovering' && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dispatch({ type: 'DISMISS' });
+                  }}
+                  style={{
+                    flex: 1,
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#2C2C2E',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#FFFFFF',
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
+                {state.peerName && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (onOpenChat && state.chatPeerId) {
+                        onOpenChat(state.chatPeerId);
+                      } else {
+                        onOpenMain();
+                      }
+                      dispatch({ type: 'DISMISS' });
+                    }}
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      borderRadius: 9999,
+                      background: '#2C2C2E',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      color: '#FFFFFF',
+                      fontSize: 14,
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Chat
+                  </button>
+                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenMain();
+                    dispatch({ type: 'DISMISS' });
+                  }}
+                  style={{
+                    flex: 1.2,
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#007AFF',
+                    border: 'none',
+                    color: '#FFFFFF',
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
+                  }}
+                >
+                  Share Files
+                </button>
+              </>
+            )}
 
-          {/* Phase: Chat Message Alert */}
-          {state.phase === 'message' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 13, color: '#38BDF8', fontWeight: 700 }}>💬 {state.chatSender}</span>
-                <span style={{ fontSize: 11, color: '#9CA3AF' }}>just now</span>
-              </div>
-              <div
-                style={{
-                  fontSize: 12,
-                  color: '#F3F4F6',
-                  background: 'rgba(255, 255, 255, 0.06)',
-                  padding: '8px 10px',
-                  borderRadius: 10,
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  wordBreak: 'break-word',
-                  lineHeight: 1.4,
-                }}
-              >
-                {state.chatText}
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+            {state.phase === 'message' && (
+              <>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dispatch({ type: 'DISMISS' });
+                  }}
+                  style={{
+                    flex: 1,
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#2C2C2E',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#FFFFFF',
+                    fontSize: 14,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
@@ -836,77 +903,45 @@ export const DesktopIsland: React.FC<{
                     dispatch({ type: 'DISMISS' });
                   }}
                   style={{
-                    flex: 1,
-                    padding: '7px 12px',
-                    borderRadius: 8,
-                    background: '#38BDF8',
+                    flex: 1.2,
+                    height: 40,
+                    borderRadius: 9999,
+                    background: '#007AFF',
                     border: 'none',
-                    color: '#000',
-                    fontSize: 11,
+                    color: '#FFFFFF',
+                    fontSize: 14,
                     fontWeight: 700,
                     cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
                   }}
                 >
-                  Reply in Chat
+                  Open Chat
                 </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    dispatch({ type: 'DISMISS' });
-                  }}
-                  style={{
-                    padding: '7px 12px',
-                    borderRadius: 8,
-                    background: 'rgba(255, 255, 255, 0.08)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    color: '#9CA3AF',
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
-          )}
+              </>
+            )}
 
-          {/* Phase 5: Nearby Devices Discovery */}
-          {state.phase === 'discovering' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ fontSize: 12, color: '#D1D5DB' }}>
-                {state.peerCount === 1
-                  ? `${state.peerName} is ready to connect`
-                  : `${state.peerCount} devices discovered nearby`}
-              </div>
+            {state.phase === 'failed' && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  onOpenMain();
+                  dispatch({ type: 'DISMISS' });
                 }}
                 style={{
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  background: 'rgba(167, 139, 250, 0.15)',
-                  border: '1px solid rgba(167, 139, 250, 0.3)',
-                  color: '#C4B5FD',
-                  fontSize: 11,
+                  width: '100%',
+                  height: 38,
+                  borderRadius: 9999,
+                  background: '#2C2C2E',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: '#FFFFFF',
+                  fontSize: 13,
                   fontWeight: 600,
                   cursor: 'pointer',
-                  alignSelf: 'flex-start',
                 }}
               >
-                Send Files via AirDrop
+                Close
               </button>
-            </div>
-          )}
-
-          {/* Phase 6: Idle */}
-          {state.phase === 'idle' && (
-            <div style={{ fontSize: 11, color: '#6B7280' }}>
-              Listening for nearby transfers 24/7…
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

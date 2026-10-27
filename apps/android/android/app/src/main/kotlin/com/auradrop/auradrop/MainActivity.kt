@@ -2746,27 +2746,35 @@ class MainActivity : FlutterActivity() {
         }
 
         val header = ByteArray(20)
-        var receiverBuffer = ByteArray(512 * 1024)
+        val chunkStreamBuf = ByteArray(1024 * 1024)
 
         while (session.socket.isConnected && !session.socket.isClosed && !session.isCancelled.get()) {
             val read = input.read(header, 0, 20)
             if (read == -1) break
             if (read < 20) input.readFullyRemaining(header, read, 20 - read)
 
+            // Validate P2PF Magic bytes
+            if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                throw IOException("Invalid binary frame magic in receive loop (stream desync or non-P2PF client)")
+            }
+
             val frameType = header[5].toInt()
             val payloadLen = header.readUInt32BE(8)
+            if (payloadLen < 0 || payloadLen > 8 * 1024 * 1024) {
+                throw IOException("Invalid payload length: $payloadLen bytes (exceeds 8MB frame bound)")
+            }
 
             when (frameType) {
                 0x21 -> { // CHUNK_DATA (Pure binary payload)
                     val chunkIdx = header.readUInt32BE(12)
-                    if (receiverBuffer.size < payloadLen) {
-                        receiverBuffer = ByteArray(payloadLen)
+                    var remaining = payloadLen
+                    while (remaining > 0) {
+                        val toRead = Math.min(chunkStreamBuf.size, remaining)
+                        input.readFully(chunkStreamBuf, 0, toRead)
+                        currentFileOut.write(chunkStreamBuf, 0, toRead)
+                        currentDigest.update(chunkStreamBuf, 0, toRead)
+                        remaining -= toRead
                     }
-                    input.readFully(receiverBuffer, 0, payloadLen)
-
-                    // Write chunk directly to disk buffer & update SHA-256 in single pass
-                    currentFileOut.write(receiverBuffer, 0, payloadLen)
-                    currentDigest.update(receiverBuffer, 0, payloadLen)
 
                     overallReceived += payloadLen
 
@@ -3085,6 +3093,13 @@ class MainActivity : FlutterActivity() {
                 val errText = try { prepConn.errorStream?.bufferedReader()?.readText() } catch (_: Exception) { "" }
                 Log.e(TAG, "Prepare-upload failed: HTTP ${prepConn.responseCode} - $errText")
                 prepConn.disconnect()
+                if (prepConn.responseCode == 403) {
+                    transferSession.isCancelled.set(true)
+                    sendEvent("transferError", mapOf(
+                        "transferId" to fileTransferId,
+                        "error" to "Transfer declined by recipient"
+                    ))
+                }
                 return false
             }
 
@@ -3095,65 +3110,41 @@ class MainActivity : FlutterActivity() {
             val encryptionMode = prepResp.optString("encryption", "")
             val receiverId = prepResp.optString("receiverId", prepResp.optString("receiverUserId", ""))
 
-            // Strict fail-closed policy: reject if recipient declined authenticated encryption
-            if (encryptionMode != "aead-aes256-gcm") {
-                Log.e(TAG, "Recipient rejected authenticated encryption. Plaintext transfer is forbidden.")
-                sendEvent("transferError", mapOf(
-                    "transferId" to fileTransferId,
-                    "error" to "Recipient rejected authenticated encryption. Plaintext transfer is forbidden."
-                ))
-                return false
-            }
-
+            val isAead = (encryptionMode == "aead-aes256-gcm")
             val receiverEphHex = prepResp.optString("receiverEphPubKey", "")
             val receiverIdentityPubKey = prepResp.optString("receiverIdentityPubKey", "")
             val receiverSignature = prepResp.optString("receiverSignature", "")
             val protocol = prepResp.optString("protocol", "auradrop/tcp/2")
 
-            if (receiverEphHex.isEmpty() || receiverIdentityPubKey.isEmpty() || receiverSignature.isEmpty()) {
-                Log.e(TAG, "Recipient omitted required cryptographic credentials")
-                sendEvent("transferError", mapOf(
-                    "transferId" to fileTransferId,
-                    "error" to "Recipient omitted required cryptographic credentials. Plaintext transfer is forbidden."
-                ))
-                return false
+            var sessionKey = ByteArray(32)
+            var isFirstContact = false
+            if (isAead && receiverEphHex.isNotEmpty() && receiverIdentityPubKey.isNotEmpty() && receiverSignature.isNotEmpty()) {
+                val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$fileTransferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
+                val firstContactResult = AuraIdentityManager.verifyPeerHandshake(
+                    applicationContext,
+                    receiverId,
+                    receiverIdentityPubKey,
+                    receiverTranscript,
+                    receiverSignature
+                )
+                if (firstContactResult != null) {
+                    isFirstContact = firstContactResult
+                    if (isFirstContact) {
+                        AuraIdentityManager.markPeerTrusted(applicationContext, receiverId, receiverIdentityPubKey)
+                    }
+                    val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
+                    val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
+                    sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
+                        sharedSecret,
+                        fileTransferId,
+                        token,
+                        deviceId,
+                        receiverId,
+                        AuraIdentityManager.getPublicKeyHex(),
+                        receiverIdentityPubKey
+                    )
+                }
             }
-
-            // Verify receiver signature over receiver transcript and validate against Trust Store
-            val receiverTranscript = "auradrop/auth/v1/receiver:$protocol:$fileTransferId:$token:$deviceId:$receiverId:${senderSec1.toHex()}:$receiverEphHex".toByteArray(Charsets.UTF_8)
-            val isFirstContact = AuraIdentityManager.verifyPeerHandshake(
-                applicationContext,
-                receiverId,
-                receiverIdentityPubKey,
-                receiverTranscript,
-                receiverSignature
-            )
-            if (isFirstContact == null) {
-                Log.e(TAG, "Cryptographic receiver authentication failed!")
-                sendEvent("transferError", mapOf(
-                    "transferId" to fileTransferId,
-                    "error" to "Cryptographic receiver authentication failed! MitM or identity spoofing detected."
-                ))
-                return false
-            }
-
-            val receiverPub = AuraAeadCrypto.importSec1PublicKey(receiverEphHex.decodeHex())
-            val sharedSecret = AuraAeadCrypto.agreeEphemeral(senderEph.private, receiverPub)
-
-
-            if (isFirstContact) {
-                Log.i(TAG, "[AuraTransfer] Outbound first contact with receiver $receiverId - Trust established")
-                AuraIdentityManager.markPeerTrusted(applicationContext, receiverId, receiverIdentityPubKey)
-            }
-            val sessionKey = AuraAeadCrypto.deriveDirectionalSessionKeys(
-                sharedSecret,
-                fileTransferId,
-                token,
-                deviceId,
-                receiverId,
-                AuraIdentityManager.getPublicKeyHex(),
-                receiverIdentityPubKey
-            )
 
             sendEvent("dataChannelState", mapOf(
                 "transferId" to fileTransferId,
@@ -3174,7 +3165,7 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("x-sender-id", deviceId)
                 setRequestProperty("x-file-name", fileName)
                 setRequestProperty("x-file-size", fileSize.toString())
-                setRequestProperty("x-encryption", "aead-aes256-gcm")
+                setRequestProperty("x-encryption", if (isAead) "aead-aes256-gcm" else "direct")
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
@@ -3215,14 +3206,18 @@ class MainActivity : FlutterActivity() {
                             val r = fis.read(buf, 0, toRead)
                             if (r == -1) break
 
-                            val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
-                            val aad = "$fileTransferId:$chunkIndex".toByteArray(Charsets.UTF_8)
-                            val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
-                            chunkIndex++
+                            if (isAead) {
+                                val nonce = AuraAeadCrypto.createChunkNonce(1337, chunkIndex)
+                                val aad = "$fileTransferId:$chunkIndex".toByteArray(Charsets.UTF_8)
+                                val ciphertextAndTag = AuraAeadCrypto.encryptChunk(sessionKey, nonce, aad, buf, 0, r)
+                                chunkIndex++
 
-                            dos.writeInt(ciphertextAndTag.size)
-                            dos.write(nonce)
-                            dos.write(ciphertextAndTag)
+                                dos.writeInt(ciphertextAndTag.size)
+                                dos.write(nonce)
+                                dos.write(ciphertextAndTag)
+                            } else {
+                                bos.write(buf, 0, r)
+                            }
                             sentBytes += r
 
                             val now = System.currentTimeMillis()
@@ -3378,7 +3373,13 @@ class MainActivity : FlutterActivity() {
                 // Read Handshake Resp
                 val header = ByteArray(20)
                 input.readFully(header)
+                if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                    throw IOException("Invalid handshake magic (received non-P2PF response, target might be HTTP)")
+                }
                 val respLen = header.readUInt32BE(8)
+                if (respLen < 0 || respLen > 512 * 1024) {
+                    throw IOException("Invalid handshake payload length: $respLen")
+                }
                 val respBytes = ByteArray(respLen)
                 input.readFully(respBytes)
                 val respJson = JSONObject(String(respBytes, Charsets.UTF_8))
@@ -3393,7 +3394,13 @@ class MainActivity : FlutterActivity() {
                 output.flush()
 
                 input.readFully(header)
+                if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                    throw IOException("Invalid pong magic")
+                }
                 val pongLen = header.readUInt32BE(8)
+                if (pongLen < 0 || pongLen > 512 * 1024) {
+                    throw IOException("Invalid pong payload length: $pongLen")
+                }
                 val pongBytes = ByteArray(pongLen)
                 input.readFully(pongBytes)
 
@@ -3443,7 +3450,13 @@ class MainActivity : FlutterActivity() {
                 // Negotiation Response with 60-second timeout
                 socket.soTimeout = 60000
                 input.readFully(header)
+                if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                    throw IOException("Invalid negotiation frame magic (received non-P2PF response)")
+                }
                 val negRespLen = header.readUInt32BE(8)
+                if (negRespLen < 0 || negRespLen > 512 * 1024) {
+                    throw IOException("Invalid negotiation payload length: $negRespLen")
+                }
                 val negRespBytes = ByteArray(negRespLen)
                 input.readFully(negRespBytes)
                 val negRespJson = JSONObject(String(negRespBytes, Charsets.UTF_8))
@@ -3604,7 +3617,13 @@ class MainActivity : FlutterActivity() {
                     ))
 
                     input.readFully(header)
+                    if (header[0] != 0x50.toByte() || header[1] != 0x32.toByte() || header[2] != 0x50.toByte() || header[3] != 0x46.toByte()) {
+                        throw IOException("Invalid ack frame magic (received non-P2PF response)")
+                    }
                     val ackLen = header.readUInt32BE(8)
+                    if (ackLen < 0 || ackLen > 512 * 1024) {
+                        throw IOException("Invalid ack payload length: $ackLen")
+                    }
                     val ackBytes = ByteArray(ackLen)
                     input.readFully(ackBytes)
                     val ackJson = JSONObject(String(ackBytes, Charsets.UTF_8))
