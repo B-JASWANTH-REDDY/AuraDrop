@@ -3,6 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "description": "AuraDrop - Next-Gen Cross-Platform Peer-to-Peer File Sharing Engine & Applications",
+  "packageManager": "pnpm@9.15.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@vgpu/adapter-node",
+      "esbuild",
+      "webgpu"
+    ]
+  },
   "workspaces": [
     "packages/*",
     "apps/*",
