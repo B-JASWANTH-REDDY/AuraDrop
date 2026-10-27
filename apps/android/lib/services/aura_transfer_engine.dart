@@ -225,9 +225,14 @@ class AuraTransferEngine {
 
       uploadReq.headers.set('x-transfer-id', transferId);
       uploadReq.headers.set('x-one-time-token', oneTimeToken);
+      uploadReq.headers.set('x-token', oneTimeToken);
+      uploadReq.headers.set('authorization', 'Bearer $oneTimeToken');
+      uploadReq.headers.set('x-sender-id', identity.deviceId);
       uploadReq.headers.set('x-file-name', Uri.encodeComponent(fileName));
       uploadReq.headers.set('x-file-size', resolvedFileSize.toString());
       uploadReq.headers.set('x-expected-sha256', expectedSha);
+      uploadReq.headers.set('x-sha256', expectedSha);
+      uploadReq.headers.set('x-encryption', 'none');
       uploadReq.contentLength = resolvedFileSize;
 
       int bytesSent = 0;

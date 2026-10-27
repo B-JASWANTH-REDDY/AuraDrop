@@ -19,6 +19,12 @@ export const TransferModal: React.FC<TransferModalProps> = ({
   onOpenFile,
   onConfirmVerification,
 }) => {
+  const [isAccepting, setIsAccepting] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsAccepting(false);
+  }, [transfer?.transferId]);
+
   if (!transfer) return null;
 
   const formatBytes = (bytes: number) => {
@@ -191,16 +197,30 @@ export const TransferModal: React.FC<TransferModalProps> = ({
           {isWaitingDecision && transfer.isIncoming && (
             <>
               <button
+                disabled={isAccepting}
                 onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, false)}
-                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-neutral-800 hover:bg-neutral-700 text-white border border-white/15 active:scale-95"
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-neutral-800 hover:bg-neutral-700 text-white border border-white/15 active:scale-95 disabled:opacity-50"
               >
                 Decline
               </button>
               <button
-                onClick={() => onConfirmVerification && onConfirmVerification(transfer.transferId, true)}
-                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-white hover:bg-neutral-200 text-black shadow-lg shadow-white/10 active:scale-95"
+                disabled={isAccepting}
+                onClick={() => {
+                  setIsAccepting(true);
+                  if (onConfirmVerification) {
+                    onConfirmVerification(transfer.transferId, true);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold transition-all bg-white hover:bg-neutral-200 text-black shadow-lg shadow-white/10 active:scale-95 disabled:opacity-70 flex items-center justify-center gap-1.5"
               >
-                Accept
+                {isAccepting ? (
+                  <>
+                    <span className="w-3 h-3 rounded-full border-2 border-black border-t-transparent animate-spin" />
+                    <span>Accepting...</span>
+                  </>
+                ) : (
+                  'Accept'
+                )}
               </button>
             </>
           )}

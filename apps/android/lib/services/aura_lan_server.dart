@@ -721,7 +721,14 @@ class AuraLanServer {
         _activeTransferId ??
         '';
 
+    final authHeader = request.headers.value('authorization');
+    final bearerToken = (authHeader != null && authHeader.toLowerCase().startsWith('bearer '))
+        ? authHeader.substring(7).trim()
+        : null;
+
     final providedToken = request.headers.value('x-one-time-token') ??
+        request.headers.value('x-token') ??
+        bearerToken ??
         request.uri.queryParameters['token'] ??
         request.headers.value('x-session-token') ??
         '';

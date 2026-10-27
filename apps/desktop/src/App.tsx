@@ -44,6 +44,7 @@ export const App: React.FC = () => {
   const [settingsInitialTab, setSettingsInitialTab] = useState<TabKey>('general');
   const [isPickingFiles, setIsPickingFiles] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [incomingChatToast, setIncomingChatToast] = useState<{ senderName: string; text: string; peerId: string } | null>(null);
 
   // Initialize Local Info and Listeners
   useEffect(() => {
@@ -117,36 +118,35 @@ export const App: React.FC = () => {
       }
     });
 
+    // 6. Listen for incoming chat messages in main window
+    const unlistenChat = listen<any>('chat-message-received', (event) => {
+      const msg = event.payload;
+      if (msg && !msg.isOutgoing) {
+        setIncomingChatToast({
+          senderName: msg.senderName || msg.peerName || 'Nearby Peer',
+          text: msg.text || '',
+          peerId: msg.peerId || msg.senderId || '',
+        });
+        setTimeout(() => setIncomingChatToast(null), 8000);
+      }
+    });
+
     return () => {
       unlistenPeers.then((fn) => fn());
       unlistenTransfer.then((fn) => fn());
       unlistenOpenChat.then((fn) => fn());
+      unlistenChat.then((fn) => fn());
     };
   }, []);
 
-  // Manage Floating Island Window: Hide when main window is in-focus, show when outside (blurred)
+  // Ensure Floating Island Window is visible
   useEffect(() => {
     try {
       const win = getCurrentWebviewWindow();
       if (win && win.label !== 'main') return;
     } catch (_) {}
 
-    const handleFocus = () => {
-      invoke('hide_island_window').catch(() => {});
-    };
-    const handleBlur = () => {
-      invoke('show_island_window').catch(() => {});
-    };
-
-    window.addEventListener('focus', handleFocus);
-    window.addEventListener('blur', handleBlur);
-    // Main window is focused on startup, so suppress overlapping floating island
-    handleFocus();
-
-    return () => {
-      window.removeEventListener('focus', handleFocus);
-      window.removeEventListener('blur', handleBlur);
-    };
+    invoke('show_island_window').catch(() => {});
   }, []);
 
   // Action: Select Peer
@@ -227,6 +227,10 @@ export const App: React.FC = () => {
       await invoke('confirm_transfer_verification', { transferId, confirmed });
       if (!confirmed) {
         setActiveTransfer(null);
+      } else {
+        setActiveTransfer((prev) =>
+          prev ? { ...prev, status: 'transferring', bytesTransferred: 0, progressPercent: 0 } : null
+        );
       }
     } catch (err) {
       console.error('Failed to confirm verification:', err);
@@ -490,6 +494,44 @@ export const App: React.FC = () => {
           history={history}
           onClearHistory={() => setHistory([])}
         />
+      )}
+
+      {incomingChatToast && !chatPeer && (
+        <div className="absolute top-16 right-6 z-50 bg-[#1C1C1E] border border-white/20 rounded-2xl p-4 shadow-2xl flex items-center gap-3 animate-fade-in max-w-sm">
+          <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold flex-shrink-0 text-lg">
+            💬
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-bold text-white truncate">{incomingChatToast.senderName}</p>
+            <p className="text-xs text-neutral-300 truncate">{incomingChatToast.text}</p>
+          </div>
+          <button
+            onClick={() => {
+              const target = peers.find((p) => p.id === incomingChatToast.peerId) || {
+                id: incomingChatToast.peerId,
+                name: incomingChatToast.senderName,
+                platform: 'device',
+                ip: '',
+                port: 53317,
+                status: 'online',
+                version: '2.0',
+                lastSeenMs: Date.now(),
+                isOnline: true,
+              };
+              setChatPeer(target);
+              setIncomingChatToast(null);
+            }}
+            className="py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold transition-colors flex-shrink-0"
+          >
+            Reply
+          </button>
+          <button
+            onClick={() => setIncomingChatToast(null)}
+            className="text-neutral-400 hover:text-white text-xs px-1"
+          >
+            ✕
+          </button>
+        </div>
       )}
     </div>
   );

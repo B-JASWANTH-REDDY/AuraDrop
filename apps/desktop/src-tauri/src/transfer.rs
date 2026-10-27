@@ -542,6 +542,7 @@ impl TransferService {
             .header("expect", "")
             .header("authorization", format!("Bearer {}", prep_data.one_time_token))
             .header("x-token", &prep_data.one_time_token)
+            .header("x-one-time-token", &prep_data.one_time_token)
             .header("x-transfer-id", &transfer_id)
             .header("x-sender-id", &my_id)
             .header("x-file-name", &file_name)
@@ -1598,9 +1599,9 @@ async fn handle_upload(
 #[serde(rename_all = "camelCase")]
 struct IncomingChatMessage {
     pub id: Option<String>,
-    #[serde(alias = "sender_id", alias = "peerId", alias = "peer_id")]
+    #[serde(alias = "senderId", alias = "sender_id", alias = "peerId", alias = "peer_id")]
     pub sender_id: Option<String>,
-    #[serde(alias = "sender_name", alias = "peerName", alias = "peer_name")]
+    #[serde(alias = "senderName", alias = "sender_name", alias = "peerName", alias = "peer_name")]
     pub sender_name: Option<String>,
     pub text: String,
     pub timestamp: Option<i64>,
