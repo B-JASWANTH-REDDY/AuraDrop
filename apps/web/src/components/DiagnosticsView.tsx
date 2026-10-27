@@ -7,7 +7,11 @@ import { TransferEngine } from '../engine/transferEngine';
 import { TransportStatistics } from '../engine/transport';
 import { SignalingDiagnostics } from '../engine/signalingClient';
 
-export const DiagnosticsView: React.FC = () => {
+interface DiagnosticsViewProps {
+  isDark?: boolean;
+}
+
+export const DiagnosticsView: React.FC<DiagnosticsViewProps> = ({ isDark = true }) => {
   const engine = TransferEngine.getInstance();
   const signalingClient = engine.getSignalingClient();
 
@@ -33,110 +37,124 @@ export const DiagnosticsView: React.FC = () => {
 
   const isConnected = signalingDiag.wsState === 'OPEN';
 
+  // Theme-aware tokens
+  const textPrimary = isDark ? '#FFFFFF' : '#0F172A';
+  const textMuted = isDark ? '#8E8E93' : '#64748B';
+  const panelBg = isDark ? '#16161A' : '#F8FAFC';
+  const panelBorder = isDark ? '#282830' : '#E2E8F0';
+  const inputBg = isDark ? '#0E0E10' : '#FFFFFF';
+  const inputBorder = isDark ? '#2C2C32' : '#CBD5E1';
+  const btnPriBg = isDark ? '#FFFFFF' : '#0F172A';
+  const btnPriText = isDark ? '#000000' : '#FFFFFF';
+  const btnSecBg = isDark ? '#24242A' : '#E2E8F0';
+  const btnSecText = isDark ? '#E4E4E7' : '#334155';
+  const monoValColor = isDark ? '#FFFFFF' : '#0F172A';
+
   return (
-    <div
-      style={{
-        width: '100%',
-        maxWidth: '760px',
-        background: '#101012',
-        border: '1px solid #222226',
-        borderRadius: '24px',
-        padding: '24px 28px',
-        boxShadow: '0 16px 40px rgba(0, 0, 0, 0.7)',
-        maxHeight: '82vh',
-        overflowY: 'auto',
-      }}
-    >
-      {/* Top Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+    <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      {/* Top Header / Live State Pill */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h2 style={{ fontSize: '18px', fontWeight: 900, color: '#FFFFFF', letterSpacing: '-0.3px' }}>
-            AuraDrop V13 Physical Connectivity Diagnostics
-          </h2>
-          <p style={{ fontSize: '12px', color: '#8E8E93', marginTop: '4px' }}>
-            Forensic physical networking tracer — Zero simulation.
+          <div style={{ fontSize: '14px', fontWeight: 800, color: textPrimary, letterSpacing: '-0.02em' }}>
+            Forensic Physical Connectivity
+          </div>
+          <p style={{ fontSize: '12px', color: textMuted, margin: '2px 0 0' }}>
+            Real-time peer registry, WebSocket telemetry &amp; WebRTC direct data plane
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span
             style={{
-              background: isConnected ? 'rgba(52, 199, 89, 0.15)' : 'rgba(255, 69, 58, 0.15)',
-              border: `1px solid ${isConnected ? '#34C759' : '#FF453A'}`,
-              color: isConnected ? '#34C759' : '#FF453A',
+              background: isConnected
+                ? (isDark ? 'rgba(52, 199, 89, 0.15)' : '#ecfdf5')
+                : (isDark ? 'rgba(255, 69, 58, 0.15)' : '#fef2f2'),
+              border: `1px solid ${isConnected ? (isDark ? '#34C759' : '#10b981') : (isDark ? '#FF453A' : '#ef4444')}`,
+              color: isConnected ? (isDark ? '#34C759' : '#059669') : (isDark ? '#FF453A' : '#dc2626'),
               fontSize: '11px',
               fontWeight: 800,
-              padding: '4px 10px',
-              borderRadius: '12px',
+              padding: '4px 11px',
+              borderRadius: '9999px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
             }}
           >
-            ● SIGNALING: {signalingDiag.wsState}
+            <span
+              style={{
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: isConnected ? '#10b981' : '#ef4444',
+                boxShadow: isConnected ? '0 0 6px #10b981' : 'none',
+              }}
+            />
+            SIGNALING: {signalingDiag.wsState}
           </span>
         </div>
       </div>
 
-      {/* 1. SIGNALING TRACE PANEL (Section 2 & 30) */}
+      {/* 1. SIGNALING TRACE PANEL */}
       <div
         style={{
-          background: '#16161A',
-          border: '1px solid #282830',
-          borderRadius: '18px',
-          padding: '18px 20px',
-          marginBottom: '20px',
+          background: panelBg,
+          border: `1px solid ${panelBorder}`,
+          borderRadius: '16px',
+          padding: '16px 18px',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#FFFFFF', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Physical Signaling & Peer Registry
+          <div style={{ fontSize: '11px', fontWeight: 800, color: textPrimary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Physical Signaling &amp; Peer Registry
           </div>
-          <span style={{ fontSize: '11px', color: '#8E8E93' }}>
-            Peers Online: <strong style={{ color: '#FFFFFF' }}>{signalingDiag.connectedPeersCount}</strong>
+          <span style={{ fontSize: '11.5px', color: textMuted }}>
+            Peers Online: <strong style={{ color: textPrimary }}>{signalingDiag.connectedPeersCount}</strong>
           </span>
         </div>
 
-        <div style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', display: 'grid', gap: '10px', fontSize: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px', fontSize: '12px' }}>
           <div>
-            <span style={{ color: '#8E8E93' }}>Web App URL: </span>
-            <div style={{ color: '#FFFFFF', fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '2px' }}>
+            <span style={{ color: textMuted }}>Web App URL: </span>
+            <div style={{ color: monoValColor, fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '3px' }}>
               {signalingDiag.webAppUrl}
             </div>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Active Signaling URL: </span>
-            <div style={{ color: '#A1A1AA', fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '2px' }}>
+            <span style={{ color: textMuted }}>Active Signaling URL: </span>
+            <div style={{ color: monoValColor, fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all', marginTop: '3px' }}>
               {signalingDiag.signalingUrl || 'None configured'}
             </div>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>WebSocket State: </span>
-            <span style={{ color: isConnected ? '#34C759' : '#FF453A', fontWeight: 700 }}>
+            <span style={{ color: textMuted }}>WebSocket State: </span>
+            <span style={{ color: isConnected ? '#10b981' : '#ef4444', fontWeight: 700 }}>
               {signalingDiag.wsState}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Registration Status: </span>
-            <span style={{ color: signalingDiag.registrationStatus === 'CONFIRMED' ? '#34C759' : '#FF9F0A', fontWeight: 700 }}>
+            <span style={{ color: textMuted }}>Registration Status: </span>
+            <span style={{ color: signalingDiag.registrationStatus === 'CONFIRMED' ? '#10b981' : '#f59e0b', fontWeight: 700 }}>
               {signalingDiag.registrationStatus}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Last Socket Error: </span>
-            <span style={{ color: signalingDiag.lastWsError ? '#FF453A' : '#34C759' }}>
+            <span style={{ color: textMuted }}>Last Socket Error: </span>
+            <span style={{ color: signalingDiag.lastWsError ? '#ef4444' : '#10b981', fontWeight: 600 }}>
               {signalingDiag.lastWsError || 'None (Healthy)'}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Last Close Code: </span>
-            <span style={{ color: '#FFFFFF' }}>
+            <span style={{ color: textMuted }}>Last Close Code: </span>
+            <span style={{ color: monoValColor, fontFamily: 'monospace' }}>
               {signalingDiag.lastWsCloseCode ? signalingDiag.lastWsCloseCode : 'N/A'}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Device ID: </span>
-            <span style={{ color: '#FFFFFF', fontFamily: 'monospace' }}>{engine.localId}</span>
+            <span style={{ color: textMuted }}>Device ID: </span>
+            <span style={{ color: monoValColor, fontFamily: 'monospace' }}>{engine.localId}</span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Secure Context: </span>
-            <span style={{ color: signalingDiag.isSecureContext ? '#34C759' : '#FF9F0A' }}>
+            <span style={{ color: textMuted }}>Secure Context: </span>
+            <span style={{ color: signalingDiag.isSecureContext ? '#10b981' : '#f59e0b', fontWeight: 600 }}>
               {signalingDiag.isSecureContext ? 'Yes (HTTPS/localhost)' : 'HTTP LAN (WebRTC functional)'}
             </span>
           </div>
@@ -146,25 +164,23 @@ export const DiagnosticsView: React.FC = () => {
         {!isConnected && (
           <div
             style={{
-              marginTop: '16px',
-              padding: '12px 14px',
-              background: 'rgba(255, 69, 58, 0.1)',
-              border: '1px solid rgba(255, 69, 58, 0.3)',
-              borderRadius: '12px',
-              fontSize: '12px',
-              color: '#FF6961',
-              lineHeight: '1.4',
+              marginTop: '14px',
+              padding: '10px 14px',
+              background: isDark ? 'rgba(239, 68, 68, 0.12)' : '#fef2f2',
+              border: `1px solid ${isDark ? 'rgba(239, 68, 68, 0.3)' : '#fecaca'}`,
+              borderRadius: '10px',
+              fontSize: '11.5px',
+              color: isDark ? '#fca5a5' : '#b91c1c',
+              lineHeight: 1.5,
             }}
           >
-            <strong>❌ Signaling Disconnected:</strong> Cannot reach <code>{signalingDiag.signalingUrl}</code>.
-            <br />
-            If testing on a physical mobile device, ensure your phone is on the same Wi-Fi network and connect to the desktop's LAN IP below.
+            <strong>Signaling Disconnected:</strong> Cannot reach <code>{signalingDiag.signalingUrl}</code>. If testing on mobile, ensure your device is connected to the same Wi-Fi.
           </div>
         )}
 
-        {/* Custom Signaling URL Configuration Form (Section 3 & 4) */}
-        <div style={{ marginTop: '16px', paddingTop: '14px', borderTop: '1px solid #24242A' }}>
-          <div style={{ fontSize: '11px', color: '#8E8E93', fontWeight: 700, textTransform: 'uppercase', marginBottom: '8px' }}>
+        {/* Custom Signaling URL Configuration Form */}
+        <div style={{ marginTop: '16px', paddingTop: '12px', borderTop: `1px solid ${panelBorder}` }}>
+          <div style={{ fontSize: '11px', color: textMuted, fontWeight: 700, textTransform: 'uppercase', marginBottom: '8px' }}>
             Desktop / Custom Signaling Server Endpoint (Same Wi-Fi)
           </div>
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -175,12 +191,12 @@ export const DiagnosticsView: React.FC = () => {
               onChange={(e) => setCustomUrlInput(e.target.value)}
               style={{
                 flex: 1,
-                minWidth: '240px',
-                background: '#0E0E10',
-                border: '1px solid #2C2C32',
-                borderRadius: '10px',
+                minWidth: '220px',
+                background: inputBg,
+                border: `1px solid ${inputBorder}`,
+                borderRadius: '8px',
                 padding: '8px 12px',
-                color: '#FFFFFF',
+                color: monoValColor,
                 fontSize: '12px',
                 fontFamily: 'monospace',
                 outline: 'none',
@@ -189,11 +205,11 @@ export const DiagnosticsView: React.FC = () => {
             <button
               onClick={() => handleSaveSignalingUrl(customUrlInput)}
               style={{
-                background: '#FFFFFF',
+                background: btnPriBg,
                 border: 'none',
-                borderRadius: '10px',
+                borderRadius: '8px',
                 padding: '8px 16px',
-                color: '#000000',
+                color: btnPriText,
                 fontSize: '12px',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -207,11 +223,11 @@ export const DiagnosticsView: React.FC = () => {
                 handleSaveSignalingUrl('');
               }}
               style={{
-                background: '#24242A',
+                background: btnSecBg,
                 border: 'none',
-                borderRadius: '10px',
+                borderRadius: '8px',
                 padding: '8px 12px',
-                color: '#8E8E93',
+                color: btnSecText,
                 fontSize: '12px',
                 fontWeight: 600,
                 cursor: 'pointer',
@@ -223,7 +239,7 @@ export const DiagnosticsView: React.FC = () => {
 
           {/* Quick preset buttons for local LAN */}
           <div style={{ display: 'flex', gap: '6px', marginTop: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '11px', color: '#636366' }}>Detected LAN Presets:</span>
+            <span style={{ fontSize: '11px', color: textMuted }}>Detected LAN Presets:</span>
             <button
               onClick={() => {
                 const url = 'wss://api.auradrop.network/ws';
@@ -231,36 +247,17 @@ export const DiagnosticsView: React.FC = () => {
                 handleSaveSignalingUrl(url);
               }}
               style={{
-                background: '#1A2433',
-                border: '1px solid #34C759',
-                borderRadius: '8px',
-                color: '#34C759',
-                fontSize: '10px',
+                background: isDark ? '#1A2433' : '#ecfdf5',
+                border: `1px solid ${isDark ? '#34C759' : '#10b981'}`,
+                borderRadius: '6px',
+                color: isDark ? '#34C759' : '#059669',
+                fontSize: '10.5px',
                 fontWeight: 700,
                 padding: '3px 8px',
                 cursor: 'pointer',
               }}
             >
-              ☁️ Cloud: wss://api.auradrop.network/ws
-            </button>
-            <button
-              onClick={() => {
-                const url = 'ws://192.168.0.8:48280';
-                setCustomUrlInput(url);
-                handleSaveSignalingUrl(url);
-              }}
-              style={{
-                background: '#1E1E24',
-                border: '1px solid #3F3F46',
-                borderRadius: '8px',
-                color: '#FFFFFF',
-                fontSize: '10px',
-                fontWeight: 700,
-                padding: '3px 8px',
-                cursor: 'pointer',
-              }}
-            >
-              ⚡ Wi-Fi: ws://192.168.0.8:48280
+              ☁️ Cloud Relay
             </button>
             <button
               onClick={() => {
@@ -269,106 +266,111 @@ export const DiagnosticsView: React.FC = () => {
                 handleSaveSignalingUrl(url);
               }}
               style={{
-                background: '#1E1E24',
-                border: '1px solid #2C2C32',
-                borderRadius: '8px',
-                color: '#8E8E93',
-                fontSize: '10px',
+                background: isDark ? '#1E1E24' : '#f1f5f9',
+                border: `1px solid ${isDark ? '#2C2C32' : '#cbd5e1'}`,
+                borderRadius: '6px',
+                color: textMuted,
+                fontSize: '10.5px',
                 fontWeight: 600,
                 padding: '3px 8px',
                 cursor: 'pointer',
               }}
             >
-              Host: ws://{window.location.hostname}:48280
+              Host: {window.location.hostname}:48280
             </button>
             {showConfigSaved && (
-              <span style={{ fontSize: '11px', color: '#34C759', fontWeight: 700, marginLeft: '6px' }}>
-                ✓ Applied & Reconnecting...
+              <span style={{ fontSize: '11px', color: '#10b981', fontWeight: 700, marginLeft: '6px' }}>
+                ✓ Applied &amp; Reconnecting...
               </span>
             )}
           </div>
         </div>
       </div>
 
-      {/* 2. WEBRTC TELEMETRY PANEL (Section 18, 19, 32) */}
+      {/* 2. WEBRTC TELEMETRY PANEL */}
       <div
         style={{
-          background: '#16161A',
-          border: '1px solid #282830',
-          borderRadius: '18px',
-          padding: '18px 20px',
-          marginBottom: '20px',
+          background: panelBg,
+          border: `1px solid ${panelBorder}`,
+          borderRadius: '16px',
+          padding: '16px 18px',
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 800, color: '#34C759', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 800, color: isDark ? '#34C759' : '#059669', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
             WebRTC Direct Data Plane
           </div>
-          <span style={{ fontSize: '11px', color: '#8E8E93' }}>
-            Transport: <strong style={{ color: '#FFFFFF' }}>{transportStats.transportName}</strong>
+          <span style={{ fontSize: '11.5px', color: textMuted }}>
+            Transport: <strong style={{ color: textPrimary }}>{transportStats.transportName}</strong>
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '10px', fontSize: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', fontSize: '12px' }}>
           <div>
-            <span style={{ color: '#8E8E93' }}>ICE State: </span>
-            <span style={{ color: transportStats.iceState === 'connected' ? '#34C759' : '#FF9F0A', fontWeight: 700 }}>
+            <span style={{ color: textMuted }}>ICE State: </span>
+            <span style={{ color: transportStats.iceState === 'connected' ? '#10b981' : '#f59e0b', fontWeight: 700 }}>
               {transportStats.iceState}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Connection: </span>
-            <span style={{ color: transportStats.connectionState === 'connected' ? '#34C759' : '#8E8E93' }}>
+            <span style={{ color: textMuted }}>Connection: </span>
+            <span style={{ color: transportStats.connectionState === 'connected' ? '#10b981' : textMuted }}>
               {transportStats.connectionState}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Data Channel: </span>
-            <span style={{ color: transportStats.dataChannelState === 'open' ? '#34C759' : '#8E8E93', fontWeight: 700 }}>
+            <span style={{ color: textMuted }}>Data Channel: </span>
+            <span style={{ color: transportStats.dataChannelState === 'open' ? '#10b981' : textMuted, fontWeight: 700 }}>
               {transportStats.dataChannelState}
             </span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Round-Trip Time: </span>
-            <span style={{ color: '#FFFFFF' }}>{transportStats.rttMs} ms</span>
+            <span style={{ color: textMuted }}>Round-Trip Time: </span>
+            <span style={{ color: textPrimary, fontWeight: 600 }}>{transportStats.rttMs} ms</span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Selected Local Candidate: </span>
-            <span style={{ color: '#FFFFFF' }}>{transportStats.localCandidateType || 'host'}</span>
+            <span style={{ color: textMuted }}>Selected Candidate: </span>
+            <span style={{ color: textPrimary, fontFamily: 'monospace' }}>{transportStats.localCandidateType || 'host'}</span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Selected Remote Candidate: </span>
-            <span style={{ color: '#FFFFFF' }}>{transportStats.remoteCandidateType || 'host'}</span>
+            <span style={{ color: textMuted }}>Socket Buffer: </span>
+            <span style={{ color: textPrimary }}>{(transportStats.bufferedAmount / 1024).toFixed(1)} KB</span>
           </div>
           <div>
-            <span style={{ color: '#8E8E93' }}>Socket Buffered Amount: </span>
-            <span style={{ color: '#FFFFFF' }}>{(transportStats.bufferedAmount / 1024).toFixed(1)} KB</span>
-          </div>
-          <div>
-            <span style={{ color: '#8E8E93' }}>Throughput Bytes Sent: </span>
-            <span style={{ color: '#FFFFFF' }}>{(transportStats.bytesSent / (1024 * 1024)).toFixed(2)} MB</span>
+            <span style={{ color: textMuted }}>Throughput Sent: </span>
+            <span style={{ color: textPrimary }}>{(transportStats.bytesSent / (1024 * 1024)).toFixed(2)} MB</span>
           </div>
         </div>
       </div>
 
       {/* 3. PHYSICAL VERIFICATION INSTRUCTIONS */}
-      <div style={{ borderTop: '1px solid #1C1C20', paddingTop: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ fontSize: '11px', color: '#636366' }}>
-          Android testing on same Wi-Fi? Open <strong>http://192.168.0.21:5173</strong> or test health at <strong>http://192.168.0.21:48280/health</strong>
+      <div
+        style={{
+          borderTop: `1px solid ${panelBorder}`,
+          paddingTop: '12px',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '10px',
+        }}
+      >
+        <div style={{ fontSize: '11px', color: textMuted }}>
+          Testing on same Wi-Fi? Verify backend health at <code>/health</code>
         </div>
         <a
-          href="http://192.168.0.8:48280/health"
+          href="/health"
           target="_blank"
           rel="noreferrer"
           style={{
-            background: '#1E1E24',
-            border: '1px solid #3F3F46',
-            color: '#FFFFFF',
+            background: btnSecBg,
+            border: `1px solid ${panelBorder}`,
+            color: textPrimary,
             textDecoration: 'none',
             fontSize: '11px',
             fontWeight: 700,
-            padding: '6px 12px',
-            borderRadius: '10px',
+            padding: '5px 12px',
+            borderRadius: '8px',
           }}
         >
           Verify Backend /health

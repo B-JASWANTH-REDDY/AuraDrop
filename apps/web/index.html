@@ -69,19 +69,24 @@
       background: #0f172a;
       color: #ffffff;
     }
+    /* Global Sleek Scrollbar (No ugly white background tracks) */
+    * {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+    }
     ::-webkit-scrollbar {
       width: 6px;
       height: 6px;
     }
     ::-webkit-scrollbar-track {
-      background: #f8fafc;
+      background: transparent !important;
     }
     ::-webkit-scrollbar-thumb {
-      background: #cbd5e1;
-      border-radius: 4px;
+      background: rgba(148, 163, 184, 0.35);
+      border-radius: 9999px;
     }
     ::-webkit-scrollbar-thumb:hover {
-      background: #94a3b8;
+      background: rgba(148, 163, 184, 0.65);
     }
     #root {
       width: 100%;

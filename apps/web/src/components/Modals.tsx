@@ -7,6 +7,8 @@ interface ModalWrapperProps {
   isOpen: boolean;
   onClose: () => void;
   children: React.ReactNode;
+  maxWidth?: string;
+  isDark?: boolean;
 }
 
 export const ModalWrapper: React.FC<ModalWrapperProps> = ({
@@ -14,6 +16,8 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
   isOpen,
   onClose,
   children,
+  maxWidth = '540px',
+  isDark = true,
 }) => {
   useEffect(() => {
     if (!isOpen) return;
@@ -28,6 +32,14 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
 
   if (!isOpen) return null;
 
+  const bg = isDark ? '#121214' : '#ffffff';
+  const border = isDark ? '#242428' : '#e2e8f0';
+  const titleColor = isDark ? '#ffffff' : '#0f172a';
+  const headerBorder = isDark ? '#1c1c1e' : '#f1f5f9';
+  const closeBtnBg = isDark ? '#1a1a1e' : '#f1f5f9';
+  const closeBtnBorder = isDark ? '#2a2a2e' : '#e2e8f0';
+  const closeBtnColor = isDark ? '#8e8e93' : '#64748b';
+
   return (
     <div
       role="dialog"
@@ -36,8 +48,9 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.75)',
+        background: isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(15, 23, 42, 0.45)',
         backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -48,16 +61,18 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
     >
       <div
         style={{
-          background: '#121214',
-          border: '1px solid #242428',
+          background: bg,
+          border: `1px solid ${border}`,
           borderRadius: '24px',
           width: '100%',
-          maxWidth: '520px',
-          maxHeight: '85vh',
+          maxWidth: maxWidth,
+          maxHeight: '88vh',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.9)',
+          boxShadow: isDark
+            ? '0 24px 60px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(255, 255, 255, 0.06)'
+            : '0 24px 60px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.04)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -67,30 +82,44 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
             alignItems: 'center',
             justifyContent: 'space-between',
             padding: '18px 24px',
-            borderBottom: '1px solid #1C1C1E',
+            borderBottom: `1px solid ${headerBorder}`,
           }}
         >
-          <div style={{ fontSize: '16px', fontWeight: 800, color: '#FFFFFF' }}>{title}</div>
+          <div style={{ fontSize: '16px', fontWeight: 800, color: titleColor, letterSpacing: '-0.01em' }}>{title}</div>
           <button
             onClick={onClose}
+            aria-label="Close dialog"
             style={{
-              background: '#1A1A1E',
-              border: '1px solid #2A2A2E',
+              background: closeBtnBg,
+              border: `1px solid ${closeBtnBorder}`,
               borderRadius: '50%',
-              width: '30px',
-              height: '30px',
+              width: '32px',
+              height: '32px',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#8E8E93',
+              color: closeBtnColor,
               cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 700,
+              transition: 'all 0.15s ease',
             }}
           >
             ✕
           </button>
         </div>
 
-        <div style={{ padding: '24px', overflowY: 'auto', flex: 1 }}>{children}</div>
+        <div
+          style={{
+            padding: '24px',
+            overflowY: 'auto',
+            flex: 1,
+            scrollbarWidth: 'thin',
+            scrollbarColor: isDark ? 'rgba(255, 255, 255, 0.15) transparent' : 'rgba(148, 163, 184, 0.35) transparent',
+          }}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -844,10 +873,11 @@ export const TransferHistoryModal: React.FC<{
 export const DiagnosticsModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
-}> = ({ isOpen, onClose }) => {
+  isDark?: boolean;
+}> = ({ isOpen, onClose, isDark = true }) => {
   return (
-    <ModalWrapper title="WebRTC & Signaling Diagnostics" isOpen={isOpen} onClose={onClose}>
-      <DiagnosticsView />
+    <ModalWrapper title="WebRTC & Signaling Diagnostics" isOpen={isOpen} onClose={onClose} maxWidth="740px" isDark={isDark}>
+      <DiagnosticsView isDark={isDark} />
     </ModalWrapper>
   );
 };
@@ -856,9 +886,10 @@ export const DiagnosticsModal: React.FC<{
 export const DownloadsModal: React.FC<{
   isOpen: boolean;
   onClose: () => void;
-}> = ({ isOpen, onClose }) => {
+  isDark?: boolean;
+}> = ({ isOpen, onClose, isDark = true }) => {
   return (
-    <ModalWrapper title="Download AuraDrop Apps" isOpen={isOpen} onClose={onClose}>
+    <ModalWrapper title="Download AuraDrop Apps" isOpen={isOpen} onClose={onClose} maxWidth="600px" isDark={isDark}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
         <p style={{ fontSize: '13px', color: '#8E8E93', lineHeight: '1.5', margin: 0 }}>
           High-speed local peer-to-peer file sharing with zero cloud relay. Download official binaries for Windows and Android, or share directly in Safari on iOS and Mac.

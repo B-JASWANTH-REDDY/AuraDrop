@@ -234,6 +234,27 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
 
   if (!isOpen) return null;
 
+  const overlayBg = isDark ? 'rgba(0, 0, 0, 0.75)' : 'rgba(15, 23, 42, 0.45)';
+  const cardBg = isDark ? '#111115' : '#ffffff';
+  const cardBorder = isDark ? '#28282e' : '#e2e8f0';
+  const cardShadow = isDark
+    ? '0 25px 60px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.08)'
+    : '0 25px 60px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.05)';
+  const searchBorder = isDark ? '#202024' : '#f1f5f9';
+  const inputColor = isDark ? '#ffffff' : '#0f172a';
+  const escBg = isDark ? '#24242a' : '#f1f5f9';
+  const escBorder = isDark ? '#33333a' : '#e2e8f0';
+  const escColor = isDark ? '#a1a1aa' : '#64748b';
+  const itemTextColor = isDark ? '#e4e4e7' : '#334155';
+  const itemSelectedColor = isDark ? '#ffffff' : '#0f172a';
+  const itemSelectedBg = isDark ? 'rgba(255, 255, 255, 0.08)' : '#f1f5f9';
+  const badgeBg = isDark ? '#1c1c22' : '#f8fafc';
+  const badgeBorder = isDark ? '#2a2a32' : '#e2e8f0';
+  const badgeColor = isDark ? '#a1a1aa' : '#64748b';
+  const footerBg = isDark ? '#0c0c0e' : '#f8fafc';
+  const footerBorder = isDark ? '#1a1a20' : '#f1f5f9';
+  const footerColor = isDark ? '#71717a' : '#64748b';
+
   return (
     <div
       role="dialog"
@@ -242,8 +263,9 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.75)',
+        background: overlayBg,
         backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'center',
@@ -256,15 +278,16 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
     >
       <div
         style={{
-          background: '#111115',
-          border: '1px solid #28282e',
+          background: cardBg,
+          border: `1px solid ${cardBorder}`,
           borderRadius: '20px',
           width: '100%',
           maxWidth: '560px',
-          boxShadow: '0 25px 60px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.08)',
+          boxShadow: cardShadow,
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
+          transition: 'background 0.2s ease, border-color 0.2s ease',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -275,7 +298,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
             alignItems: 'center',
             gap: '12px',
             padding: '16px 20px',
-            borderBottom: '1px solid #202024',
+            borderBottom: `1px solid ${searchBorder}`,
           }}
         >
           <span style={{ fontSize: '18px', color: '#71717a' }}>🔍</span>
@@ -293,7 +316,7 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
               background: 'transparent',
               border: 'none',
               outline: 'none',
-              color: '#ffffff',
+              color: inputColor,
               fontSize: '15px',
               fontFamily: 'inherit',
             }}
@@ -304,17 +327,25 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
               fontWeight: 700,
               padding: '2px 6px',
               borderRadius: '4px',
-              background: '#24242a',
-              color: '#a1a1aa',
-              border: '1px solid #33333a',
+              background: escBg,
+              color: escColor,
+              border: `1px solid ${escBorder}`,
             }}
           >
             ESC
           </span>
         </div>
 
-        {/* Command List */}
-        <div style={{ maxHeight: '380px', overflowY: 'auto', padding: '8px' }}>
+        {/* Command List with custom smooth transparent scrollbar */}
+        <div
+          style={{
+            maxHeight: '420px',
+            overflowY: 'auto',
+            padding: '8px',
+            scrollbarWidth: 'thin',
+            scrollbarColor: isDark ? 'rgba(255, 255, 255, 0.15) transparent' : 'rgba(148, 163, 184, 0.35) transparent',
+          }}
+        >
           {filtered.length === 0 ? (
             <div style={{ padding: '32px 16px', textAlign: 'center', color: '#71717a', fontSize: '13px' }}>
               No matching commands or downloads found
@@ -333,14 +364,14 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                     justifyContent: 'space-between',
                     padding: '10px 14px',
                     borderRadius: '10px',
-                    background: isSelected ? 'rgba(255, 255, 255, 0.08)' : 'transparent',
+                    background: isSelected ? itemSelectedBg : 'transparent',
                     cursor: 'pointer',
                     transition: 'background 0.1s ease',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                     <span style={{ fontSize: '16px' }}>{item.icon}</span>
-                    <span style={{ fontSize: '13px', fontWeight: 600, color: isSelected ? '#ffffff' : '#e4e4e7' }}>
+                    <span style={{ fontSize: '13px', fontWeight: 600, color: isSelected ? itemSelectedColor : itemTextColor }}>
                       {item.title}
                     </span>
                   </div>
@@ -351,11 +382,11 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                         className="tabular-nums"
                         style={{
                           fontSize: '11px',
-                          color: '#a1a1aa',
-                          background: '#1c1c22',
+                          color: badgeColor,
+                          background: badgeBg,
                           padding: '2px 6px',
                           borderRadius: '4px',
-                          border: '1px solid #2a2a32',
+                          border: `1px solid ${badgeBorder}`,
                         }}
                       >
                         {item.badge}
@@ -365,17 +396,18 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
                       <span
                         style={{
                           fontSize: '11px',
-                          color: '#71717a',
-                          background: '#1c1c22',
+                          color: badgeColor,
+                          background: badgeBg,
                           padding: '2px 6px',
                           borderRadius: '4px',
+                          border: `1px solid ${badgeBorder}`,
                         }}
                       >
                         {item.shortcut}
                       </span>
                     )}
                     {isSelected && (
-                      <span style={{ fontSize: '12px', color: '#ffffff' }}>↵</span>
+                      <span style={{ fontSize: '12px', color: itemSelectedColor }}>↵</span>
                     )}
                   </div>
                 </div>
@@ -388,13 +420,13 @@ export const CommandMenu: React.FC<CommandMenuProps> = ({
         <div
           style={{
             padding: '10px 16px',
-            borderTop: '1px solid #1a1a20',
-            background: '#0c0c0e',
+            borderTop: `1px solid ${footerBorder}`,
+            background: footerBg,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             fontSize: '11px',
-            color: '#71717a',
+            color: footerColor,
           }}
         >
           <div style={{ display: 'flex', gap: '12px' }}>

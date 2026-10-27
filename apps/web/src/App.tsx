@@ -414,6 +414,8 @@ export const App: React.FC = () => {
               gap: '12px',
               textDecoration: 'none',
               color: textPrimary,
+              flexShrink: 0,
+              marginRight: '36px',
             }}
           >
             <div
@@ -445,11 +447,11 @@ export const App: React.FC = () => {
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: '28px',
+              gap: '24px',
               listStyle: 'none',
+              flex: 1,
             }}
           >
-            <a href="#about" className="nav-link cursor-pointer">About</a>
             <a href="#features" className="nav-link cursor-pointer">Features</a>
             <a href="#protocol" className="nav-link cursor-pointer">Protocol</a>
             <a href="#architecture" className="nav-link cursor-pointer">Architecture</a>
@@ -458,9 +460,9 @@ export const App: React.FC = () => {
           </nav>
 
           {/* Right Action Buttons */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
             {/* Live Signaling Status Indicator */}
-            <div className="desktop-nav">
+            <div className="desktop-nav" style={{ flexShrink: 0 }}>
               <LiveStatusPill peerCount={peers.length} onClick={() => setIsDiagnosticsOpen(true)} isDark={isDark} />
             </div>
 
@@ -1983,8 +1985,8 @@ export const App: React.FC = () => {
         onClose={() => setIsHistoryOpen(false)}
         history={transferHistory}
       />
-      <DiagnosticsModal isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} />
-      <DownloadsModal isOpen={isDownloadsOpen} onClose={() => setIsDownloadsOpen(false)} />
+      <DiagnosticsModal isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} isDark={isDark} />
+      <DownloadsModal isOpen={isDownloadsOpen} onClose={() => setIsDownloadsOpen(false)} isDark={isDark} />
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
@@ -2002,6 +2004,7 @@ export const App: React.FC = () => {
         initialTab={legalTab}
       />
       <CookieConsentBanner
+        isDark={isDark}
         onOpenPolicy={() => {
           setLegalTab('cookies');
           setIsLegalOpen(true);

@@ -2,21 +2,22 @@ import React, { useState, useEffect } from 'react';
 
 interface CookieConsentBannerProps {
   onOpenPolicy: () => void;
+  isDark?: boolean;
 }
 
-export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpenPolicy }) => {
+export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpenPolicy, isDark = false }) => {
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
     try {
       const consent = localStorage.getItem('auradrop_cookie_consent');
       if (!consent) {
-        // Show after a brief delay for smoother initial load
-        const timer = setTimeout(() => setIsVisible(true), 800);
+        // Show after a brief delay for smooth entrance
+        const timer = setTimeout(() => setIsVisible(true), 900);
         return () => clearTimeout(timer);
       }
     } catch {
-      // Ignore localStorage errors
+      // Ignore localStorage issues
     }
   }, []);
 
@@ -36,47 +37,76 @@ export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpen
 
   if (!isVisible) return null;
 
+  const cardBg = isDark ? '#111116' : '#ffffff';
+  const borderCol = isDark ? '#27272a' : '#e2e8f0';
+  const textHead = isDark ? '#ffffff' : '#0f172a';
+  const textBody = isDark ? '#94a3b8' : '#475569';
+  const linkCol = isDark ? '#60a5fa' : '#2563eb';
+  const btnSecBg = isDark ? '#1c1c22' : '#f8fafc';
+  const btnSecBorder = isDark ? '#2e2e38' : '#cbd5e1';
+  const btnSecText = isDark ? '#e4e4e7' : '#334155';
+  const btnPriBg = isDark ? '#ffffff' : '#0f172a';
+  const btnPriText = isDark ? '#000000' : '#ffffff';
+
   return (
     <aside
       aria-label="Privacy and Cookie Consent"
       style={{
         position: 'fixed',
-        bottom: '20px',
-        left: '20px',
-        right: '20px',
-        maxWidth: '560px',
-        margin: '0 auto',
-        background: '#0d0d11',
-        border: '1px solid #27272a',
-        borderRadius: '16px',
-        padding: '18px 22px',
-        zIndex: 9999,
-        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05)',
+        bottom: '24px',
+        right: '24px',
+        maxWidth: '460px',
+        width: 'calc(100vw - 48px)',
+        background: cardBg,
+        border: `1px solid ${borderCol}`,
+        borderRadius: '18px',
+        padding: '18px 20px',
+        zIndex: 4000,
+        boxShadow: isDark
+          ? '0 20px 48px -10px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.05)'
+          : '0 20px 48px -10px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(15, 23, 42, 0.04)',
         display: 'flex',
         flexDirection: 'column',
         gap: '14px',
-        backdropFilter: 'blur(16px)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        transition: 'all 0.25s ease',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
-        <span style={{ fontSize: '20px' }}>🛡️</span>
-        <div>
-          <div style={{ fontSize: '14px', fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>
+        <div
+          style={{
+            width: '32px',
+            height: '32px',
+            borderRadius: '10px',
+            background: isDark ? 'rgba(59, 130, 246, 0.15)' : '#eff6ff',
+            border: `1px solid ${isDark ? 'rgba(59, 130, 246, 0.3)' : '#bfdbfe'}`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '16px',
+            flexShrink: 0,
+          }}
+        >
+          🛡️
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: '13.5px', fontWeight: 800, color: textHead, marginBottom: '4px', letterSpacing: '-0.01em' }}>
             Privacy-First Consent (DPDP Act 2023)
           </div>
-          <p style={{ fontSize: '12px', color: '#a1a1aa', lineHeight: 1.55, margin: 0 }}>
-            AuraDrop uses strictly necessary local storage for peer pairing and your dark/light theme preference. We do <strong>not</strong> use tracking cookies or sell your data.
+          <p style={{ fontSize: '12px', color: textBody, lineHeight: 1.55, margin: 0 }}>
+            AuraDrop uses strictly necessary local storage for peer pairing and your theme preference. We do <strong>not</strong> use tracking cookies or sell your data.
           </p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', paddingTop: '4px', borderTop: `1px solid ${borderCol}` }}>
         <button
           onClick={onOpenPolicy}
           style={{
             background: 'none',
             border: 'none',
-            color: '#60a5fa',
+            color: linkCol,
             fontSize: '12px',
             fontWeight: 600,
             cursor: 'pointer',
@@ -84,22 +114,22 @@ export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpen
             textDecoration: 'underline',
           }}
         >
-          View Privacy &amp; Cookie Policy
+          Privacy &amp; Cookie Policy
         </button>
 
         <div style={{ display: 'flex', gap: '8px' }}>
           <button
             onClick={handleEssentialOnly}
             style={{
-              padding: '8px 14px',
-              borderRadius: '8px',
-              background: '#1f1f23',
-              border: '1px solid #333338',
-              color: '#d1d5db',
-              fontSize: '12px',
+              padding: '7px 13px',
+              borderRadius: '9999px',
+              background: btnSecBg,
+              border: `1px solid ${btnSecBorder}`,
+              color: btnSecText,
+              fontSize: '11.5px',
               fontWeight: 600,
               cursor: 'pointer',
-              transition: 'background 0.15s ease',
+              transition: 'all 0.15s ease',
             }}
           >
             Essential Only
@@ -107,15 +137,16 @@ export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpen
           <button
             onClick={handleAccept}
             style={{
-              padding: '8px 16px',
-              borderRadius: '8px',
-              background: '#ffffff',
+              padding: '7px 16px',
+              borderRadius: '9999px',
+              background: btnPriBg,
               border: 'none',
-              color: '#000000',
-              fontSize: '12px',
+              color: btnPriText,
+              fontSize: '11.5px',
               fontWeight: 700,
               cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(255, 255, 255, 0.15)',
+              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)',
+              transition: 'all 0.15s ease',
             }}
           >
             Accept &amp; Continue
