@@ -375,6 +375,16 @@ export const DesktopIsland: React.FC<{
         transferId: state.transferId,
         confirmed: true,
       });
+      dispatch({
+        type: 'TRANSFER_START',
+        payload: {
+          transferId: state.transferId,
+          fileName: state.fileName,
+          fileSize: state.fileSizeBytes,
+          peerName: state.peerName,
+          isIncoming: true,
+        },
+      });
     } catch (err) {
       console.error('Accept transfer error:', err);
     }
@@ -634,23 +644,6 @@ export const DesktopIsland: React.FC<{
                 {fmtBytes(state.fileSizeBytes)} • Direct Wi-Fi P2P
               </div>
 
-              {state.sasCode && (
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    fontWeight: 700,
-                    letterSpacing: 2,
-                    color: '#38BDF8',
-                    background: 'rgba(56, 189, 248, 0.1)',
-                    padding: '4px 8px',
-                    borderRadius: 6,
-                    textAlign: 'center',
-                  }}
-                >
-                  Verify: {state.sasCode}
-                </div>
-              )}
 
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button

@@ -785,19 +785,75 @@ async fn handle_prepare_upload(
         &receiver_eph_pub_hex,
     );
 
-    if is_first_contact {
-        crate::log_debug(&format!(
-            "[PrepareUpload] Inbound first contact from sender {} - Trust established",
-            payload.sender_user_id
-        ));
-        let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, sender_identity_hex).await;
-    }
+    // Register oneshot channel for interactive user authorization (Accept / Decline)
+    let (decision_tx, decision_rx) = tokio::sync::oneshot::channel::<bool>();
+    service.pending_verifications.write().await.insert(payload.transfer_id.clone(), decision_tx);
 
     if let Some(ref handle) = service.app_handle {
         if let Some(window) = handle.get_webview_window("main") {
             let _ = window.show();
             let _ = window.unminimize();
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
         }
+        let _ = handle.emit("incoming-share", json!({
+            "transferId": payload.transfer_id,
+            "senderName": sender_name,
+            "fileName": payload.file_name,
+            "fileSize": payload.file_size,
+            "totalBytes": payload.file_size,
+            "isIncoming": true,
+        }));
+    }
+
+    service.emit_progress(TransferProgressPayload {
+        transfer_id: payload.transfer_id.clone(),
+        file_name: payload.file_name.clone(),
+        file_size: payload.file_size,
+        bytes_transferred: 0,
+        progress_percent: 0.0,
+        speed_mbps: 0.0,
+        eta_seconds: 0,
+        is_incoming: true,
+        status: "awaiting_verification".to_string(),
+        peer_name: sender_name.clone(),
+        error: None,
+        file_path: None,
+        sas_code: None,
+        is_first_contact: Some(is_first_contact),
+    }).await;
+
+    // Await user's explicit Accept or Decline decision (60 seconds)
+    let user_accepted = match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
+        Ok(Ok(decision)) => decision,
+        _ => false,
+    };
+    service.pending_verifications.write().await.remove(&payload.transfer_id);
+
+    if !user_accepted {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Inbound transfer {} declined by user or timed out",
+            payload.transfer_id
+        ));
+        service.emit_error(
+            &payload.transfer_id,
+            &payload.file_name,
+            payload.file_size,
+            &sender_name,
+            true,
+            "Transfer declined by recipient"
+        ).await;
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "Transfer declined by recipient", "accepted": false})),
+        ));
+    }
+
+    if is_first_contact {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Inbound first contact from sender {} - Trust established upon user acceptance",
+            payload.sender_user_id
+        ));
+        let _ = service.identity.mark_peer_trusted(&payload.sender_user_id, sender_identity_hex).await;
     }
 
     service.emit_progress(TransferProgressPayload {

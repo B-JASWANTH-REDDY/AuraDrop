@@ -1178,7 +1178,7 @@ class MainActivity : FlutterActivity() {
                         totalFiles = totalFiles,
                         totalBytes = totalBytes,
                         firstFileName = fileName,
-                        sasCode = "4829 1049"
+                        sasCode = ""
                     )
                     result.success(true)
                 }
@@ -1809,7 +1809,6 @@ class MainActivity : FlutterActivity() {
                             "totalFiles" to totalFiles,
                             "totalBytes" to totalBytes,
                             "fileName" to firstFileName,
-                            "sas" to sasCode,
                             "files" to filesList,
                             "resumeOffsets" to resumeOffsets.toString(),
                             "connectionState" to "WAITING_FOR_ACCEPTANCE"
@@ -1823,7 +1822,7 @@ class MainActivity : FlutterActivity() {
                             totalFiles = totalFiles,
                             totalBytes = totalBytes,
                             firstFileName = firstFileName,
-                            sasCode = sasCode
+                            sasCode = ""
                         )
                     }
 
@@ -2205,68 +2204,57 @@ class MainActivity : FlutterActivity() {
                         "expiresAt" to expiresAt
                     ))
 
-                    val isRecentlyApproved = (recentlyApprovedSenders[senderUserId]?.let { System.currentTimeMillis() - it < 300_000L } == true)
-                    val isPeerTrusted = !isFirstContact || AuraIdentityManager.isPeerTrusted(applicationContext, senderUserId) || dbHelper.getTrustedPeers().any { it["peerId"] == senderUserId }
-                    val shouldAutoAccept = isRecentlyApproved || isPeerTrusted
+                    showSystemIncomingShareNotification(
+                        transferId = xferId,
+                        senderName = senderName,
+                        senderDeviceName = senderName,
+                        totalFiles = 1,
+                        totalBytes = fileSize,
+                        firstFileName = fileName,
+                        sasCode = ""
+                    )
 
-                    val accepted = if (shouldAutoAccept) {
-                        Log.i(TAG, "Auto-accepting incoming transfer from trusted/recent peer: $senderUserId ($senderName)")
-                        recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
-                        true
-                    } else {
-                        showSystemIncomingShareNotification(
-                            transferId = xferId,
-                            senderName = senderName,
-                            senderDeviceName = senderName,
-                            totalFiles = 1,
-                            totalBytes = fileSize,
-                            firstFileName = fileName,
-                            sasCode = sasCodeStr
-                        )
+                    val decisionDeferred = CompletableDeferred<Boolean>()
+                    pendingHttpDecisions[xferId] = decisionDeferred
 
-                        val decisionDeferred = CompletableDeferred<Boolean>()
-                        pendingHttpDecisions[xferId] = decisionDeferred
-
-                        // Show AirDrop floating island overlay (lock screen / home screen / other apps)
-                        AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
-                            transferId = xferId,
-                            senderName = senderName,
-                            fileName = fileName,
-                            totalBytes = fileSize,
-                            onAccept = {
-                                Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
-                                acceptIncomingTransfer(xferId)
-                            },
-                            onDecline = {
-                                Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
-                                declineIncomingTransfer(xferId)
-                            }
-                        )
-
-                        // Also dispatch Flutter event so in-app receive dialog displays if user is in app
-                        val shareEventMap = mapOf(
-                            "requestId" to xferId,
-                            "transferId" to xferId,
-                            "senderName" to senderName,
-                            "senderDeviceId" to senderUserId,
-                            "firstFileName" to fileName,
-                            "fileName" to fileName,
-                            "totalBytes" to fileSize,
-                            "totalFiles" to 1,
-                            "fileCount" to 1
-                        )
-                        sendEvent("incomingShareRequest", shareEventMap)
-                        sendEvent("transferRequest", shareEventMap)
-
-                        // Await user's explicit Accept or Decline decision (up to 60 seconds)
-                        val userDecision = withTimeoutOrNull(60000L) {
-                            decisionDeferred.await()
-                        } ?: false
-                        pendingHttpDecisions.remove(xferId)
-                        if (userDecision) {
-                            recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
+                    // Show AirDrop floating island overlay (lock screen / home screen / other apps)
+                    AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
+                        transferId = xferId,
+                        senderName = senderName,
+                        fileName = fileName,
+                        totalBytes = fileSize,
+                        onAccept = {
+                            Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
+                            acceptIncomingTransfer(xferId)
+                        },
+                        onDecline = {
+                            Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
+                            declineIncomingTransfer(xferId)
                         }
-                        userDecision
+                    )
+
+                    // Also dispatch Flutter event so in-app receive dialog displays if user is in app
+                    val shareEventMap = mapOf(
+                        "requestId" to xferId,
+                        "transferId" to xferId,
+                        "senderName" to senderName,
+                        "senderDeviceId" to senderUserId,
+                        "firstFileName" to fileName,
+                        "fileName" to fileName,
+                        "totalBytes" to fileSize,
+                        "totalFiles" to 1,
+                        "fileCount" to 1
+                    )
+                    sendEvent("incomingShareRequest", shareEventMap)
+                    sendEvent("transferRequest", shareEventMap)
+
+                    // Await user's explicit Accept or Decline decision (up to 60 seconds)
+                    val accepted = withTimeoutOrNull(60000L) {
+                        decisionDeferred.await()
+                    } ?: false
+                    pendingHttpDecisions.remove(xferId)
+                    if (accepted) {
+                        recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
                     }
 
                     if (accepted) {
