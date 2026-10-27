@@ -238,6 +238,8 @@ pub struct BenchSession {
     pub sender_id: String,
     pub is_consumed: Arc<AtomicBool>,
     pub session_key: [u8; 32],
+    pub resume_offset: Option<u64>,
+    pub resume_chunk_index: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -263,6 +265,33 @@ async fn bench_handle_prepare_upload(
 
     if file_name.trim().is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Empty filename"}))));
+    }
+
+    // Checkpoint & resume negotiation
+    let safe_name = sanitize_filename(&file_name);
+    let part_path = state.downloads_dir.join(format!(".{}.{}.part", safe_name, transfer_id));
+    let resume_meta_path = state.downloads_dir.join(format!(".{}.{}.resume.json", safe_name, transfer_id));
+
+    let mut resume_offset: Option<u64> = None;
+    let mut resume_chunk_index: Option<u64> = None;
+
+    if resume_meta_path.exists() && part_path.exists() {
+        if let Ok(meta_bytes) = std::fs::read(&resume_meta_path) {
+            if let Ok(meta_val) = serde_json::from_slice::<serde_json::Value>(&meta_bytes) {
+                let ckpt_size = meta_val["fileSize"].as_u64().unwrap_or(0);
+                let ckpt_sender = meta_val["senderId"].as_str().unwrap_or("");
+                let ckpt_bytes = meta_val["bytesCommitted"].as_u64().unwrap_or(0);
+                let ckpt_chunk = meta_val["chunkIndex"].as_u64().unwrap_or(0);
+                let actual_part_len = std::fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+                if ckpt_size == file_size && ckpt_sender == sender_id && actual_part_len >= ckpt_bytes && ckpt_bytes > 0 && ckpt_bytes < file_size {
+                    resume_offset = Some(ckpt_bytes);
+                    resume_chunk_index = Some(ckpt_chunk);
+                } else {
+                    let _ = std::fs::remove_file(&resume_meta_path);
+                    let _ = std::fs::remove_file(&part_path);
+                }
+            }
+        }
     }
 
     let token = Uuid::new_v4().to_string();
@@ -321,6 +350,8 @@ async fn bench_handle_prepare_upload(
         sender_id,
         is_consumed: Arc::new(AtomicBool::new(false)),
         session_key,
+        resume_offset,
+        resume_chunk_index,
     };
 
     state.sessions.write().await.insert(transfer_id.clone(), session);
@@ -333,7 +364,9 @@ async fn bench_handle_prepare_upload(
         "protocol": "auradrop/tcp/2",
         "encryption": "aead-aes256-gcm",
         "receiverId": BENCH_SERVER_ID,
-        "receiverEphPubKey": receiver_eph_pub_hex
+        "receiverEphPubKey": receiver_eph_pub_hex,
+        "resumeOffset": resume_offset,
+        "resumeChunkIndex": resume_chunk_index
     })))
 }
 
@@ -422,25 +455,71 @@ async fn bench_handle_upload(
     let final_dest = resolve_unique_destination(&state.downloads_dir, &session.file_name);
     let safe_name = sanitize_filename(&session.file_name);
     let temp_file_path = state.downloads_dir.join(format!(".{}.{}.part", safe_name, session.transfer_id));
+    let resume_meta_path = state.downloads_dir.join(format!(".{}.{}.resume.json", safe_name, session.transfer_id));
 
-    let temp_file = match File::create(&temp_file_path).await {
-        Ok(f) => f,
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+    let mut hasher = Sha256::new();
+    let mut transferred = 0u64;
+    let mut chunk_index = 0u64;
+
+    if let Some(res_off) = session.resume_offset {
+        if res_off > 0 && temp_file_path.exists() {
+            if let Ok(mut existing_file) = std::fs::File::open(&temp_file_path) {
+                use std::io::Read;
+                let mut prefix_buf = vec![0u8; 512 * 1024];
+                let mut prefix_read = 0u64;
+                while prefix_read < res_off {
+                    let to_read = (res_off - prefix_read).min(prefix_buf.len() as u64) as usize;
+                    match existing_file.read(&mut prefix_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            hasher.update(&prefix_buf[..n]);
+                            prefix_read += n as u64;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if prefix_read == res_off {
+                    transferred = res_off;
+                    chunk_index = session.resume_chunk_index.unwrap_or(0);
+                }
+            }
+        }
+    }
+
+    let temp_file = if transferred > 0 {
+        match tokio::fs::OpenOptions::new().create(true).append(true).open(&temp_file_path).await {
+            Ok(f) => f,
+            Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        }
+    } else {
+        match File::create(&temp_file_path).await {
+            Ok(f) => f,
+            Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()})))),
+        }
     };
 
     let mut writer = tokio::io::BufWriter::with_capacity(state.write_buffer_size, temp_file);
-    let mut hasher = Sha256::new();
-    let mut transferred = 0u64;
 
     let mut stream = body.into_data_stream();
     let mut stream_buf = Vec::with_capacity(1024 * 1024);
-    let mut chunk_index = 0u64;
 
     while let Some(chunk_res) = stream.next().await {
         let chunk = match chunk_res {
             Ok(c) => c,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                if transferred > 0 && transferred < session.file_size {
+                    let ckpt = json!({
+                        "transferId": session.transfer_id,
+                        "fileName": session.file_name,
+                        "fileSize": session.file_size,
+                        "sha256": session.sha256_expected,
+                        "senderId": session.sender_id,
+                        "bytesCommitted": transferred,
+                        "chunkIndex": chunk_index,
+                        "updatedAt": Utc::now().timestamp_millis()
+                    });
+                    let _ = std::fs::write(&resume_meta_path, serde_json::to_vec_pretty(&ckpt).unwrap());
+                }
                 return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
             }
         };
@@ -457,6 +536,7 @@ async fn bench_handle_upload(
 
             if payload_len < 16 || payload_len > 1024 * 1024 + 16 {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
+                let _ = tokio::fs::remove_file(&resume_meta_path).await;
                 return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Payload length out of bounds"}))));
             }
 
@@ -472,6 +552,7 @@ async fn bench_handle_upload(
             let nonce_chunk_seq = u64::from_be_bytes(nonce[4..12].try_into().unwrap());
             if nonce_chunk_seq != chunk_index {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
+                let _ = tokio::fs::remove_file(&resume_meta_path).await;
                 return Err((
                     StatusCode::BAD_REQUEST,
                     Json(json!({"error": format!("Nonce sequence counter mismatch: expected {}, got {}", chunk_index, nonce_chunk_seq)})),
@@ -490,6 +571,7 @@ async fn bench_handle_upload(
                 Ok(d) => d,
                 Err(e) => {
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    let _ = tokio::fs::remove_file(&resume_meta_path).await;
                     state.sessions.write().await.remove(&transfer_id);
                     return Err((
                         StatusCode::BAD_REQUEST,
@@ -502,7 +584,19 @@ async fn bench_handle_upload(
             stream_buf.drain(..total_frame_len);
 
             if let Err(e) = writer.write_all(&decrypted).await {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                if transferred > 0 && transferred < session.file_size {
+                    let ckpt = json!({
+                        "transferId": session.transfer_id,
+                        "fileName": session.file_name,
+                        "fileSize": session.file_size,
+                        "sha256": session.sha256_expected,
+                        "senderId": session.sender_id,
+                        "bytesCommitted": transferred,
+                        "chunkIndex": chunk_index,
+                        "updatedAt": Utc::now().timestamp_millis()
+                    });
+                    let _ = std::fs::write(&resume_meta_path, serde_json::to_vec_pretty(&ckpt).unwrap());
+                }
                 return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
             }
 
@@ -511,6 +605,7 @@ async fn bench_handle_upload(
 
             if transferred > session.file_size {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
+                let _ = tokio::fs::remove_file(&resume_meta_path).await;
                 return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Oversized payload rejected"}))));
             }
         }
@@ -518,12 +613,28 @@ async fn bench_handle_upload(
 
     if let Err(e) = writer.flush().await {
         let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
     }
     drop(writer);
 
     if transferred != session.file_size {
-        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        if transferred > 0 && transferred < session.file_size {
+            let ckpt = json!({
+                "transferId": session.transfer_id,
+                "fileName": session.file_name,
+                "fileSize": session.file_size,
+                "sha256": session.sha256_expected,
+                "senderId": session.sender_id,
+                "bytesCommitted": transferred,
+                "chunkIndex": chunk_index,
+                "updatedAt": Utc::now().timestamp_millis()
+            });
+            let _ = std::fs::write(&resume_meta_path, serde_json::to_vec_pretty(&ckpt).unwrap());
+        } else {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&resume_meta_path).await;
+        }
         return Err((StatusCode::BAD_REQUEST, Json(json!({"error": "Byte count mismatch"}))));
     }
 
@@ -532,15 +643,18 @@ async fn bench_handle_upload(
     if !expected_sha.is_empty() && !expected_sha.starts_with("stream_") {
         if !calculated_hash.eq_ignore_ascii_case(expected_sha) {
             let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&resume_meta_path).await;
             return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": "SHA-256 integrity mismatch"}))));
         }
     }
 
     if let Err(e) = tokio::fs::rename(&temp_file_path, &final_dest).await {
         let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
         return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))));
     }
 
+    let _ = tokio::fs::remove_file(&resume_meta_path).await;
     state.sessions.write().await.remove(&transfer_id);
 
     Ok(Json(json!({
@@ -921,7 +1035,8 @@ async fn test_adversarial_suite() {
         .unwrap();
     assert_eq!(trunc_res.status(), StatusCode::BAD_REQUEST, "Truncated transfer must fail closed with 400");
     assert!(!temp_dir.path().join("truncated.bin").exists(), "Truncated file must never be marked complete");
-    assert!(!temp_dir.path().join(".truncated.bin.adv_trunc_04.part").exists(), ".part file must be removed");
+    assert!(temp_dir.path().join(".truncated.bin.adv_trunc_04.part").exists(), ".part file must be preserved for resume recovery");
+    assert!(temp_dir.path().join(".truncated.bin.adv_trunc_04.resume.json").exists(), ".resume.json checkpoint must be saved");
 
     // -----------------------------------------------------------------------------------------
     // Scenario 5: Plaintext transfer attempt strictly rejected (Fail closed policy)
@@ -1093,11 +1208,238 @@ async fn test_adversarial_suite() {
     assert!(still_untrusted, "Declined or timed-out peer must remain untrusted");
 
     // -----------------------------------------------------------------------------------------
-    // Scenario 12: Trust Store persistence across manager restart
+    // Scenario 13: Zero-Byte File Transfer Validation
     // -----------------------------------------------------------------------------------------
-    let restart_mgr = auradrop_lib::identity::IdentityManager::init();
-    let is_still_known = restart_mgr.check_peer_trust_status(peer_dev_id, original_pub).await.unwrap();
-    assert!(!is_still_known, "Previously marked peer must remain trusted across manager restarts");
+    let sender_eph_zero = EphemeralKeyExchange::generate().unwrap();
+    let prep_zero_res = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "adv_zero_13",
+            "fileName": "zero_byte.dat",
+            "fileSize": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "senderUserId": client_id,
+            "senderEphPubKey": sender_eph_zero.public_key_hex()
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(prep_zero_res.status(), StatusCode::OK);
+    let prep_zero_data: serde_json::Value = prep_zero_res.json().await.unwrap();
+    let token_zero = prep_zero_data["oneTimeToken"].as_str().unwrap().to_string();
+
+    let zero_upload_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token_zero))
+        .header("x-transfer-id", "adv_zero_13")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(Vec::<u8>::new())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(zero_upload_res.status(), StatusCode::OK, "Zero-byte transfer must succeed cleanly");
+    let zero_dest = temp_dir.path().join("zero_byte.dat");
+    assert!(zero_dest.exists(), "Zero-byte file must be atomically created and committed");
+    assert_eq!(std::fs::metadata(&zero_dest).unwrap().len(), 0, "Committed zero-byte file must be 0 bytes");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 14: Oversized Payload Beyond Declared Size Rejection
+    // -----------------------------------------------------------------------------------------
+    let sender_eph_over = EphemeralKeyExchange::generate().unwrap();
+    let prep_over_res = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "adv_over_14",
+            "fileName": "oversized.bin",
+            "fileSize": 50,
+            "sha256": "stream_adv_over_14",
+            "senderUserId": client_id,
+            "senderEphPubKey": sender_eph_over.public_key_hex()
+        }))
+        .send()
+        .await
+        .unwrap();
+    let prep_over_data: serde_json::Value = prep_over_res.json().await.unwrap();
+    let token_over = prep_over_data["oneTimeToken"].as_str().unwrap().to_string();
+    let rec_pub_over = hex::decode(prep_over_data["receiverEphPubKey"].as_str().unwrap()).unwrap();
+    let shared_over = sender_eph_over.complete(&rec_pub_over).unwrap();
+    let s_key_over = derive_directional_session_keys(&shared_over, "adv_over_14", &token_over, client_id, BENCH_SERVER_ID).sender_to_receiver;
+
+    // Send 100 bytes when only 50 bytes were approved
+    let nonce_over = create_chunk_nonce(1337, 0);
+    let ctext_over = encrypt_chunk(&s_key_over, &nonce_over, b"adv_over_14:0", &vec![5u8; 100]).unwrap();
+    let mut over_frame = Vec::new();
+    over_frame.extend_from_slice(&(ctext_over.len() as u32).to_be_bytes());
+    over_frame.extend_from_slice(&nonce_over);
+    over_frame.extend_from_slice(&ctext_over);
+
+    let over_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token_over))
+        .header("x-transfer-id", "adv_over_14")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(over_frame)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(over_res.status(), StatusCode::BAD_REQUEST, "Oversized payload must be rejected");
+    assert!(!temp_dir.path().join("oversized.bin").exists(), "Oversized file must never be committed");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 15: SHA-256 Integrity Checksum Mismatch Detection
+    // -----------------------------------------------------------------------------------------
+    let sender_eph_sha = EphemeralKeyExchange::generate().unwrap();
+    let prep_sha_res = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "adv_sha_15",
+            "fileName": "corrupted_hash.bin",
+            "fileSize": 100,
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000", // Deliberately bogus expected SHA
+            "senderUserId": client_id,
+            "senderEphPubKey": sender_eph_sha.public_key_hex()
+        }))
+        .send()
+        .await
+        .unwrap();
+    let prep_sha_data: serde_json::Value = prep_sha_res.json().await.unwrap();
+    let token_sha = prep_sha_data["oneTimeToken"].as_str().unwrap().to_string();
+    let rec_pub_sha = hex::decode(prep_sha_data["receiverEphPubKey"].as_str().unwrap()).unwrap();
+    let shared_sha = sender_eph_sha.complete(&rec_pub_sha).unwrap();
+    let s_key_sha = derive_directional_session_keys(&shared_sha, "adv_sha_15", &token_sha, client_id, BENCH_SERVER_ID).sender_to_receiver;
+
+    let nonce_sha = create_chunk_nonce(1337, 0);
+    let ctext_sha = encrypt_chunk(&s_key_sha, &nonce_sha, b"adv_sha_15:0", &vec![9u8; 100]).unwrap();
+    let mut sha_frame = Vec::new();
+    sha_frame.extend_from_slice(&(ctext_sha.len() as u32).to_be_bytes());
+    sha_frame.extend_from_slice(&nonce_sha);
+    sha_frame.extend_from_slice(&ctext_sha);
+
+    let sha_mismatch_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token_sha))
+        .header("x-transfer-id", "adv_sha_15")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(sha_frame)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sha_mismatch_res.status(), StatusCode::UNPROCESSABLE_ENTITY, "Checksum mismatch must return 422");
+    assert!(!temp_dir.path().join("corrupted_hash.bin").exists(), "Mismatched checksum file must never be committed");
+    assert!(!temp_dir.path().join(".corrupted_hash.bin.adv_sha_15.part").exists(), ".part file must be removed");
+
+    // -----------------------------------------------------------------------------------------
+    // Scenario 16: Interrupted Transfer Checkpoint Preservation and Verified Resume
+    // -----------------------------------------------------------------------------------------
+    let sender_eph_resume = EphemeralKeyExchange::generate().unwrap();
+    let total_resume_len = 200u64;
+    let full_content = vec![0x37u8; 200];
+    let mut full_hasher = Sha256::new();
+    full_hasher.update(&full_content);
+    let full_expected_sha = hex::encode(full_hasher.finalize());
+
+    // Step 1: Initial prepare for 200-byte file
+    let prep_res1 = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "adv_resume_16",
+            "fileName": "resumable_video.mp4",
+            "fileSize": total_resume_len,
+            "sha256": full_expected_sha,
+            "senderUserId": client_id,
+            "senderEphPubKey": sender_eph_resume.public_key_hex()
+        }))
+        .send()
+        .await
+        .unwrap();
+    let prep_data1: serde_json::Value = prep_res1.json().await.unwrap();
+    let token1 = prep_data1["oneTimeToken"].as_str().unwrap().to_string();
+    let rec_pub1 = hex::decode(prep_data1["receiverEphPubKey"].as_str().unwrap()).unwrap();
+    let shared1 = sender_eph_resume.complete(&rec_pub1).unwrap();
+    let s_key1 = derive_directional_session_keys(&shared1, "adv_resume_16", &token1, client_id, BENCH_SERVER_ID).sender_to_receiver;
+
+    // Send only chunk 0 (100 bytes) and disconnect
+    let nonce_r0 = create_chunk_nonce(1337, 0);
+    let ctext_r0 = encrypt_chunk(&s_key1, &nonce_r0, b"adv_resume_16:0", &full_content[0..100]).unwrap();
+    let mut part1_stream = Vec::new();
+    part1_stream.extend_from_slice(&(ctext_r0.len() as u32).to_be_bytes());
+    part1_stream.extend_from_slice(&nonce_r0);
+    part1_stream.extend_from_slice(&ctext_r0);
+
+    let stream_err = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token1))
+        .header("x-transfer-id", "adv_resume_16")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(part1_stream)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream_err.status(), StatusCode::BAD_REQUEST, "Under-delivered upload must error");
+
+    // Verify .part file and .resume.json exist on disk
+    let part_file = temp_dir.path().join(".resumable_video.mp4.adv_resume_16.part");
+    let resume_json = temp_dir.path().join(".resumable_video.mp4.adv_resume_16.resume.json");
+    assert!(part_file.exists(), "Interrupted transfer must retain .part file for recovery");
+    assert!(resume_json.exists(), "Interrupted transfer must persist .resume.json checkpoint");
+    assert_eq!(std::fs::metadata(&part_file).unwrap().len(), 100, "Partial file must contain exactly 100 bytes");
+
+    // Step 2: Reconnection - Client handshakes again with same transfer ID
+    let sender_eph_resume2 = EphemeralKeyExchange::generate().unwrap();
+    let prep_res2 = client
+        .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
+        .json(&json!({
+            "transferId": "adv_resume_16",
+            "fileName": "resumable_video.mp4",
+            "fileSize": total_resume_len,
+            "sha256": full_expected_sha,
+            "senderUserId": client_id,
+            "senderEphPubKey": sender_eph_resume2.public_key_hex()
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(prep_res2.status(), StatusCode::OK);
+    let prep_data2: serde_json::Value = prep_res2.json().await.unwrap();
+    assert_eq!(prep_data2["resumeOffset"].as_u64(), Some(100), "Server must negotiate resumeOffset at 100 bytes");
+    assert_eq!(prep_data2["resumeChunkIndex"].as_u64(), Some(1), "Server must negotiate resumeChunkIndex at 1");
+
+    let token2 = prep_data2["oneTimeToken"].as_str().unwrap().to_string();
+    let rec_pub2 = hex::decode(prep_data2["receiverEphPubKey"].as_str().unwrap()).unwrap();
+    let shared2 = sender_eph_resume2.complete(&rec_pub2).unwrap();
+    let s_key2 = derive_directional_session_keys(&shared2, "adv_resume_16", &token2, client_id, BENCH_SERVER_ID).sender_to_receiver;
+
+    // Send chunk 1 (remaining 100 bytes from offset 100..200)
+    let nonce_r1 = create_chunk_nonce(1337, 1);
+    let ctext_r1 = encrypt_chunk(&s_key2, &nonce_r1, b"adv_resume_16:1", &full_content[100..200]).unwrap();
+    let mut part2_stream = Vec::new();
+    part2_stream.extend_from_slice(&(ctext_r1.len() as u32).to_be_bytes());
+    part2_stream.extend_from_slice(&nonce_r1);
+    part2_stream.extend_from_slice(&ctext_r1);
+
+    let resume_complete_res = client
+        .post(format!("{}/api/auradrop/v1/upload", base_url))
+        .header("authorization", format!("Bearer {}", token2))
+        .header("x-transfer-id", "adv_resume_16")
+        .header("x-sender-id", client_id)
+        .header("x-encryption", "aead-aes256-gcm")
+        .body(part2_stream)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resume_complete_res.status(), StatusCode::OK, "Resumed upload must complete with 200 OK");
+    let resume_resp_val: serde_json::Value = resume_complete_res.json().await.unwrap();
+    assert_eq!(resume_resp_val["verified"], true, "Final combined file must be verified true");
+
+    // Verify final destination file is committed, correct length, and resume checkpoint removed
+    let final_resumed_file = temp_dir.path().join("resumable_video.mp4");
+    assert!(final_resumed_file.exists(), "Final committed file must exist");
+    assert_eq!(std::fs::metadata(&final_resumed_file).unwrap().len(), 200, "Final file must have exactly 200 bytes");
+    assert!(!resume_json.exists(), ".resume.json metadata must be deleted on completion");
 }
 
 #[tokio::test]

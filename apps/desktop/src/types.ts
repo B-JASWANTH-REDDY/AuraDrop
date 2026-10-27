@@ -38,6 +38,7 @@ export interface TransferProgressPayload {
   isIncoming: boolean;
   status:
     | 'transferring' | 'sending' | 'receiving'
+    | 'verifying'
     | 'completed' | 'failed' | 'canceled' | 'cancelled'
     | 'awaiting_verification';
   peerName: string;

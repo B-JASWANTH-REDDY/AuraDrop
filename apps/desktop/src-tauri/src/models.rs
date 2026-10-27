@@ -141,6 +141,23 @@ pub struct PrepareUploadResponse {
     pub quic_port: Option<u16>,
     #[serde(default)]
     pub cert_fingerprint: Option<String>,
+    #[serde(default)]
+    pub resume_offset: Option<u64>,
+    #[serde(default)]
+    pub resume_chunk_index: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransferCheckpoint {
+    pub transfer_id: String,
+    pub file_name: String,
+    pub file_size: u64,
+    pub sha256_expected: String,
+    pub sender_id: String,
+    pub bytes_committed: u64,
+    pub chunk_index: u64,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

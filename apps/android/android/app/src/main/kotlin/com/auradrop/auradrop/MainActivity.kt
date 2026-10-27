@@ -183,12 +183,16 @@ object AuraAeadCrypto {
     }
 
     fun decryptChunk(keyBytes: ByteArray, nonce: ByteArray, aad: ByteArray, ciphertextAndTag: ByteArray): ByteArray {
+        return decryptChunk(keyBytes, nonce, aad, ciphertextAndTag, 0, ciphertextAndTag.size)
+    }
+
+    fun decryptChunk(keyBytes: ByteArray, nonce: ByteArray, aad: ByteArray, ciphertextAndTag: ByteArray, offset: Int, length: Int): ByteArray {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val spec = GCMParameterSpec(128, nonce)
         val key = SecretKeySpec(keyBytes, "AES")
         cipher.init(Cipher.DECRYPT_MODE, key, spec)
         cipher.updateAAD(aad)
-        return cipher.doFinal(ciphertextAndTag)
+        return cipher.doFinal(ciphertextAndTag, offset, length)
     }
 
     const val SAS_PROTOCOL_VERSION = "auradrop/tcp/2"
@@ -587,7 +591,9 @@ data class HttpUploadSession(
     val sessionKey: ByteArray? = null,
     val sasCode: String = "",
     val isFirstContact: Boolean = false,
-    val senderIdentityPubHex: String = ""
+    val senderIdentityPubHex: String = "",
+    val resumeOffset: Long? = null,
+    val resumeChunkIndex: Long? = null
 )
 
 object PeerRegistry {
@@ -781,6 +787,13 @@ class MainActivity : FlutterActivity() {
         handleSendIntent(intent)
     }
 
+    override fun onStart() {
+        super.onStart()
+        isAppInForeground = true
+        AuraOverlayManager.getInstance(this).isAppInForeground = true
+        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
+    }
+
     override fun onResume() {
         super.onResume()
         isAppInForeground = true
@@ -795,6 +808,12 @@ class MainActivity : FlutterActivity() {
 
     override fun onPause() {
         super.onPause()
+        isAppInForeground = false
+        AuraOverlayManager.getInstance(this).isAppInForeground = false
+    }
+
+    override fun onStop() {
+        super.onStop()
         isAppInForeground = false
         AuraOverlayManager.getInstance(this).isAppInForeground = false
     }
@@ -2121,6 +2140,59 @@ class MainActivity : FlutterActivity() {
                         return@withContext
                     }
 
+                    // Pre-flight disk space verification: reject with HTTP 507 Insufficient Storage if available space < fileSize + 10MB
+                    var targetDownloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    if (targetDownloadsDir == null || !targetDownloadsDir.exists()) {
+                        targetDownloadsDir = File(applicationContext.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: applicationContext.filesDir, "AuraDrop")
+                        if (!targetDownloadsDir.exists()) targetDownloadsDir.mkdirs()
+                    }
+                    try {
+                        val stat = android.os.StatFs(targetDownloadsDir.path)
+                        val availableBytes = stat.availableBytes
+                        val requiredBytes = fileSize + (10L * 1024L * 1024L)
+                        if (fileSize > 0 && availableBytes < requiredBytes) {
+                            Log.w(TAG, "Insufficient disk space: required $requiredBytes, available $availableBytes")
+                            sendJsonResponse(507, "Insufficient Storage", JSONObject().apply {
+                                put("error", "Insufficient storage space on recipient device: available $availableBytes bytes, required $requiredBytes bytes")
+                            })
+                            return@withContext
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Storage space verification check non-fatal warning: ${e.message}")
+                    }
+
+                    // Check for existing partial file and resume checkpoint
+                    val tempPartFile = File(targetDownloadsDir, ".${fileName}.${xferId}.part")
+                    val resumeJsonFile = File(targetDownloadsDir, ".${fileName}.${xferId}.resume.json")
+                    var resumeOffset: Long? = null
+                    var resumeChunkIndex: Long? = null
+
+                    if (resumeJsonFile.exists() && tempPartFile.exists()) {
+                        try {
+                            val resumeContent = resumeJsonFile.readText(Charsets.UTF_8)
+                            val resumeObj = JSONObject(resumeContent)
+                            val rCommitted = resumeObj.optLong("bytesCommitted", 0L)
+                            val rFileSize = resumeObj.optLong("fileSize", 0L)
+                            val rSha = resumeObj.optString("sha256Expected", "")
+                            val rSender = resumeObj.optString("senderId", "")
+                            val rChunk = resumeObj.optLong("chunkIndex", 0L)
+
+                            if (tempPartFile.length() == rCommitted &&
+                                rCommitted > 0L &&
+                                rCommitted < fileSize &&
+                                rFileSize == fileSize &&
+                                (sha256.isEmpty() || rSha.isEmpty() || rSha.equals(sha256, ignoreCase = true)) &&
+                                rSender == senderUserId
+                            ) {
+                                resumeOffset = rCommitted
+                                resumeChunkIndex = rChunk
+                                Log.i(TAG, "[AuraTransfer] Inbound transfer $xferId resuming from byte $resumeOffset (chunk $resumeChunkIndex)")
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed reading resume checkpoint for $xferId: ${e.message}")
+                        }
+                    }
+
                     // Verify sender signature over sender transcript and validate against Trust Store
                     val senderTranscript = "auradrop/auth/v1/sender:auradrop/tcp/2:$xferId:$senderUserId:$senderEphHex".toByteArray(Charsets.UTF_8)
                     val isFirstContact = AuraIdentityManager.verifyPeerHandshake(
@@ -2201,7 +2273,9 @@ class MainActivity : FlutterActivity() {
                         sessionKey = sessionKey,
                         sasCode = sasCodeStr,
                         isFirstContact = isFirstContact,
-                        senderIdentityPubHex = senderIdentityPubKey
+                        senderIdentityPubHex = senderIdentityPubKey,
+                        resumeOffset = resumeOffset,
+                        resumeChunkIndex = resumeChunkIndex
                     )
                     httpUploadSessions[xferId] = sessionMeta
 
@@ -2231,21 +2305,23 @@ class MainActivity : FlutterActivity() {
                     val decisionDeferred = CompletableDeferred<Boolean>()
                     pendingHttpDecisions[xferId] = decisionDeferred
 
-                    // Show AirDrop floating island overlay (lock screen / home screen / other apps)
-                    AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
-                        transferId = xferId,
-                        senderName = senderName,
-                        fileName = fileName,
-                        totalBytes = fileSize,
-                        onAccept = {
-                            Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
-                            acceptIncomingTransfer(xferId)
-                        },
-                        onDecline = {
-                            Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
-                            declineIncomingTransfer(xferId)
-                        }
-                    )
+                    // Show AirDrop floating island overlay ONLY when user is outside the app (lock screen / home screen / other apps)
+                    if (!isAppInForeground) {
+                        AuraOverlayManager.getInstance(applicationContext).showTransferRequestOverlay(
+                            transferId = xferId,
+                            senderName = senderName,
+                            fileName = fileName,
+                            totalBytes = fileSize,
+                            onAccept = {
+                                Log.i(TAG, "AirDrop share request accepted from floating island: $xferId")
+                                acceptIncomingTransfer(xferId)
+                            },
+                            onDecline = {
+                                Log.i(TAG, "AirDrop share request declined from floating island: $xferId")
+                                declineIncomingTransfer(xferId)
+                            }
+                        )
+                    }
 
                     // Also dispatch Flutter event so in-app receive dialog displays if user is in app
                     val shareEventMap = mapOf(
@@ -2303,6 +2379,12 @@ class MainActivity : FlutterActivity() {
                             }
                             put("sasCode", sasCodeStr)
                             put("isFirstContact", isFirstContact)
+                            if (resumeOffset != null) {
+                                put("resumeOffset", resumeOffset)
+                            }
+                            if (resumeChunkIndex != null) {
+                                put("resumeChunkIndex", resumeChunkIndex)
+                            }
                         })
                     } else {
                         cancelSystemIncomingShareNotification(xferId)
@@ -2397,6 +2479,7 @@ class MainActivity : FlutterActivity() {
 
                     val finalFile = resolveUniqueFile(downloadsDir, fileName)
                     val tempPartFile = File(downloadsDir, ".${fileName}.${xferId}.part")
+                    val resumeJsonFile = File(downloadsDir, ".${fileName}.${xferId}.resume.json")
                     val digest = MessageDigest.getInstance("SHA-256")
 
                     if (headers["x-encryption"] != "aead-aes256-gcm") {
@@ -2415,29 +2498,50 @@ class MainActivity : FlutterActivity() {
                     }
 
                     var totalWritten = 0L
+                    var chunkIndex = 0L
+
+                    // Check if resuming from partial upload checkpoint
+                    val declaredResumeOffset = headers["x-resume-offset"]?.toLongOrNull() ?: sessionMeta.resumeOffset
+                    if (declaredResumeOffset != null && declaredResumeOffset > 0L && tempPartFile.exists() && tempPartFile.length() == declaredResumeOffset) {
+                        Log.i(TAG, "[AuraTransfer] Resuming inbound upload from byte $declaredResumeOffset")
+                        val prehashBuf = ByteArray(512 * 1024)
+                        FileInputStream(tempPartFile).use { rIn ->
+                            var remainingToHash = declaredResumeOffset
+                            while (remainingToHash > 0) {
+                                val toRead = Math.min(prehashBuf.size.toLong(), remainingToHash).toInt()
+                                val r = rIn.read(prehashBuf, 0, toRead)
+                                if (r <= 0) break
+                                digest.update(prehashBuf, 0, r)
+                                remainingToHash -= r
+                            }
+                        }
+                        totalWritten = declaredResumeOffset
+                        chunkIndex = headers["x-chunk-index"]?.toLongOrNull() ?: sessionMeta.resumeChunkIndex ?: (declaredResumeOffset / (512 * 1024))
+                    }
+
                     val startTime = System.currentTimeMillis()
                     var lastProgressTime = 0L
                     var lastSpeedTime = startTime
-                    var lastSpeedBytes = 0L
+                    var lastSpeedBytes = totalWritten
                     var smoothedSpeed = 0.0
 
-                    startForegroundTransferService("Receiving $fileName...", 0)
+                    startForegroundTransferService("Receiving $fileName...", if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 0)
                     AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
                         transferId = xferId,
                         fileName = fileName,
-                        progressPercent = 0,
-                        transferredBytes = 0L,
+                        progressPercent = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 0,
+                        transferredBytes = totalWritten,
                         totalBytes = fileSize,
                         speedBytesPerSec = 0L,
                         isSending = false
                     )
 
                     var writeError = false
-                    val fos = FileOutputStream(tempPartFile)
+                    val fos = FileOutputStream(tempPartFile, totalWritten > 0)
                     try {
                         val bos = BufferedOutputStream(fos, 512 * 1024)
                         val dis = DataInputStream(input)
-                        var chunkIndex = 0L
+                        val chunkReadBuf = ByteArray(1024 * 1024 + 16)
                         while (totalWritten < fileSize) {
                             if (activeTransfersState[xferId]?.isCancelled?.get() == true || socket.isClosed) {
                                 Log.i(TAG, "Inbound HTTP upload cancelled: $xferId")
@@ -2454,11 +2558,10 @@ class MainActivity : FlutterActivity() {
                             if (nonceChunkSeq != chunkIndex) {
                                 throw SecurityException("Chunk sequence counter mismatch: expected $chunkIndex, got $nonceChunkSeq")
                             }
-                            val ciphertextAndTag = ByteArray(payloadLen)
-                            dis.readFully(ciphertextAndTag)
+                            dis.readFully(chunkReadBuf, 0, payloadLen)
 
                             val aad = "$xferId:$chunkIndex".toByteArray(Charsets.UTF_8)
-                            val plaintext = AuraAeadCrypto.decryptChunk(sessionKey, nonce, aad, ciphertextAndTag)
+                            val plaintext = AuraAeadCrypto.decryptChunk(sessionKey, nonce, aad, chunkReadBuf, 0, payloadLen)
 
                             bos.write(plaintext)
                             digest.update(plaintext)
@@ -2484,9 +2587,11 @@ class MainActivity : FlutterActivity() {
                                 val pct = if (fileSize > 0) ((totalWritten.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
                                 val eta = if (speed > 0) ((fileSize - totalWritten) / speed).toInt() else 0
 
+                                val stateStr = if (totalWritten == fileSize) "VERIFYING" else "TRANSFERRING"
+
                                 sendEvent("transferProgress", mapOf(
                                     "transferId" to xferId,
-                                    "state" to "TRANSFERRING",
+                                    "state" to stateStr,
                                     "fileName" to fileName,
                                     "totalBytes" to fileSize,
                                     "transferredBytes" to totalWritten,
@@ -2496,45 +2601,69 @@ class MainActivity : FlutterActivity() {
                                 ))
 
                                 updateForegroundTransferProgress(pct, formatSpeed(speed), fileName, totalWritten, fileSize, speed, false)
-                                AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
-                                    transferId = xferId,
-                                    fileName = fileName,
-                                    progressPercent = pct,
-                                    transferredBytes = totalWritten,
-                                    totalBytes = fileSize,
-                                    speedBytesPerSec = speed,
-                                    isSending = false
-                                )
+                                if (totalWritten == fileSize) {
+                                    AuraOverlayManager.getInstance(applicationContext).showVerifyingState(fileName, fileSize)
+                                } else {
+                                    AuraOverlayManager.getInstance(applicationContext).showOrUpdateTransferProgress(
+                                        transferId = xferId,
+                                        fileName = fileName,
+                                        progressPercent = pct,
+                                        transferredBytes = totalWritten,
+                                        totalBytes = fileSize,
+                                        speedBytesPerSec = speed,
+                                        isSending = false
+                                    )
+                                }
                             }
                         }
                         bos.flush()
                     } catch (e: Exception) {
                         writeError = true
-                        Log.e(TAG, "Disk write error during inbound transfer: ${e.message}")
+                        Log.e(TAG, "Disk write error or disconnect during inbound transfer: ${e.message}")
                     } finally {
                         try { fos.close() } catch (_: Exception) {}
                         activeClientSockets.remove(xferId)
                         activeTransfersState.remove(xferId)
                     }
 
-                    if (activeTransfersState[xferId]?.isCancelled?.get() == true || writeError) {
+                    if (activeTransfersState[xferId]?.isCancelled?.get() == true) {
                         stopForegroundTransferService()
                         AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
                         try { tempPartFile.delete() } catch (_: Exception) {}
+                        try { resumeJsonFile.delete() } catch (_: Exception) {}
                         httpUploadSessions.remove(xferId)
-                        sendJsonResponse(if (writeError) 500 else 499, if (writeError) "Internal Server Error" else "Client Closed Request", JSONObject().apply {
-                            put("status", if (writeError) "error" else "cancelled")
+                        sendJsonResponse(499, "Client Closed Request", JSONObject().apply {
+                            put("status", "cancelled")
                         })
                         return@withContext
                     }
 
-                    if (totalWritten != fileSize) {
-                        try { tempPartFile.delete() } catch (_: Exception) {}
-                        httpUploadSessions.remove(xferId)
+                    if (totalWritten < fileSize) {
+                        // Interrupted or partial transfer: save checkpoint metadata so client can resume
+                        if (totalWritten > 0) {
+                            try {
+                                val checkpointObj = JSONObject().apply {
+                                    put("transferId", xferId)
+                                    put("fileName", fileName)
+                                    put("fileSize", fileSize)
+                                    put("sha256Expected", expectedSha256)
+                                    put("senderId", sessionMeta.senderUserId)
+                                    put("bytesCommitted", totalWritten)
+                                    put("chunkIndex", chunkIndex)
+                                    put("updatedAt", System.currentTimeMillis())
+                                }
+                                resumeJsonFile.writeText(checkpointObj.toString(), Charsets.UTF_8)
+                                Log.i(TAG, "[AuraTransfer] Interrupted transfer preserved: $totalWritten / $fileSize bytes saved to checkpoint")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed writing resume checkpoint: ${e.message}")
+                            }
+                        }
                         stopForegroundTransferService()
                         AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
-                        sendJsonResponse(400, "Bad Request", JSONObject().apply {
-                            put("error", "Byte count mismatch: received $totalWritten bytes, expected $fileSize")
+                        httpUploadSessions.remove(xferId)
+                        sendJsonResponse(if (writeError) 500 else 499, if (writeError) "Internal Server Error" else "Client Closed Request", JSONObject().apply {
+                            put("error", "Transfer interrupted at $totalWritten / $fileSize bytes; checkpoint saved for resume")
+                            put("bytesReceived", totalWritten)
                         })
                         return@withContext
                     }
@@ -2543,6 +2672,7 @@ class MainActivity : FlutterActivity() {
                     if (expectedSha256.isNotEmpty() && !expectedSha256.startsWith("stream_")) {
                         if (!calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
                             try { tempPartFile.delete() } catch (_: Exception) {}
+                            try { resumeJsonFile.delete() } catch (_: Exception) {}
                             httpUploadSessions.remove(xferId)
                             stopForegroundTransferService()
                             AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
@@ -2569,6 +2699,7 @@ class MainActivity : FlutterActivity() {
 
                     if (!finalFile.exists() || finalFile.length() != fileSize) {
                         try { tempPartFile.delete() } catch (_: Exception) {}
+                        try { resumeJsonFile.delete() } catch (_: Exception) {}
                         httpUploadSessions.remove(xferId)
                         stopForegroundTransferService()
                         AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
@@ -2577,6 +2708,9 @@ class MainActivity : FlutterActivity() {
                         })
                         return@withContext
                     }
+
+                    // Remove resume checkpoint on completed verified transfer
+                    try { resumeJsonFile.delete() } catch (_: Exception) {}
 
                     // Register with MediaStore (so photos/videos show in Gallery immediately and downloads in system Downloads)
                     registerAndExportToMediaStore(finalFile)
@@ -3125,6 +3259,8 @@ class MainActivity : FlutterActivity() {
             val token = prepResp.optString("oneTimeToken", "")
             val encryptionMode = prepResp.optString("encryption", "")
             val receiverId = prepResp.optString("receiverId", prepResp.optString("receiverUserId", ""))
+            val resumeOffset = if (prepResp.has("resumeOffset")) prepResp.optLong("resumeOffset", 0L) else 0L
+            val resumeChunkIndex = if (prepResp.has("resumeChunkIndex")) prepResp.optLong("resumeChunkIndex", 0L) else 0L
 
             val isAead = (encryptionMode == "aead-aes256-gcm")
             val receiverEphHex = prepResp.optString("receiverEphPubKey", "")
@@ -3181,17 +3317,21 @@ class MainActivity : FlutterActivity() {
                 setRequestProperty("x-sender-id", deviceId)
                 setRequestProperty("x-file-name", fileName)
                 setRequestProperty("x-file-size", fileSize.toString())
+                if (resumeOffset > 0L) {
+                    setRequestProperty("x-resume-offset", resumeOffset.toString())
+                    setRequestProperty("x-chunk-index", resumeChunkIndex.toString())
+                }
                 setRequestProperty("x-encryption", if (isAead) "aead-aes256-gcm" else "direct")
                 setRequestProperty("Content-Type", "application/octet-stream")
             }
 
             activeHttpConnections[fileTransferId] = uploadConn
 
-            startForegroundTransferService("Sending $fileName...", 0)
+            startForegroundTransferService("Sending $fileName...", if (fileSize > 0) ((resumeOffset.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 0)
             val startTime = System.currentTimeMillis()
             var lastProgressTime = 0L
             var lastSpeedTime = startTime
-            var lastSpeedBytes = 0L
+            var lastSpeedBytes = resumeOffset
             var smoothedSpeed = 0.0
             var sentBytes = 0L
             val buf = ByteArray(512 * 1024)
@@ -3209,10 +3349,22 @@ class MainActivity : FlutterActivity() {
 
             try {
                 inputStream.use { fis ->
+                    var chunkIndex = 0L
+                    if (resumeOffset > 0L) {
+                        Log.i(TAG, "[AuraTransfer] Seeking stream to resume offset $resumeOffset")
+                        var skipped = 0L
+                        while (skipped < resumeOffset) {
+                            val s = fis.skip(resumeOffset - skipped)
+                            if (s <= 0) break
+                            skipped += s
+                        }
+                        sentBytes = resumeOffset
+                        chunkIndex = resumeChunkIndex
+                    }
+
                     uploadConn.outputStream.use { uos ->
                         val bos = BufferedOutputStream(uos, 512 * 1024)
                         val dos = DataOutputStream(bos)
-                        var chunkIndex = 0L
                         while (sentBytes < fileSize) {
                             if (transferSession.isCancelled.get() || activeTransfersState[transferId]?.isCancelled?.get() == true) {
                                 uploadConn.disconnect()
@@ -3255,9 +3407,11 @@ class MainActivity : FlutterActivity() {
                                 val pct = if (fileSize > 0) ((sentBytes.toDouble() / fileSize.toDouble()) * 100.0).toInt().coerceAtMost(99) else 100
                                 val eta = if (speed > 0) ((fileSize - sentBytes) / speed).toInt() else 0
 
+                                val stateStr = if (sentBytes == fileSize) "VERIFYING" else "TRANSFERRING"
+
                                 sendEvent("transferProgress", mapOf(
                                     "transferId" to fileTransferId,
-                                    "state" to "TRANSFERRING",
+                                    "state" to stateStr,
                                     "fileName" to fileName,
                                     "totalBytes" to fileSize,
                                     "transferredBytes" to sentBytes,

@@ -17,6 +17,7 @@ type IslandPhase =
   | 'discovering'
   | 'waiting_approval'
   | 'transferring'
+  | 'verifying'
   | 'completed'
   | 'failed'
   | 'message';
@@ -46,6 +47,7 @@ type IslandAction =
   | { type: 'TRANSFER_REQUEST'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_START'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_PROGRESS'; payload: Partial<TransferProgressPayload> }
+  | { type: 'TRANSFER_VERIFYING'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_COMPLETE'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_FAILED'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_CANCELLED' }
@@ -144,6 +146,22 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         fileSizeBytes: total > 0 ? total : state.fileSizeBytes,
         speedBytesPerSec: speed,
         etaSeconds: p.etaSeconds || state.etaSeconds,
+        fileName: p.fileName || state.fileName,
+        peerName: p.peerName || state.peerName,
+      };
+    }
+
+    case 'TRANSFER_VERIFYING': {
+      const p = action.payload;
+      const total = p.fileSize ?? p.totalBytes ?? state.fileSizeBytes;
+      return {
+        ...state,
+        phase: 'verifying',
+        expanded: true,
+        transferredBytes: total,
+        fileSizeBytes: total,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
         fileName: p.fileName || state.fileName,
         peerName: p.peerName || state.peerName,
       };
@@ -269,6 +287,7 @@ export const DesktopIsland: React.FC<{
       state.expanded ||
       state.phase === 'waiting_approval' ||
       state.phase === 'transferring' ||
+      state.phase === 'verifying' ||
       state.phase === 'completed' ||
       state.phase === 'message';
     const targetW = isExpanded ? 460 : 280;
@@ -328,6 +347,8 @@ export const DesktopIsland: React.FC<{
 
         if (p.status === 'awaiting_verification') {
           dispatch({ type: 'TRANSFER_REQUEST', payload: normalized });
+        } else if (p.status === 'verifying') {
+          dispatch({ type: 'TRANSFER_VERIFYING', payload: normalized });
         } else if (p.status === 'transferring' || p.status === 'sending' || p.status === 'receiving') {
           if (transferred === 0) {
             dispatch({ type: 'TRANSFER_START', payload: normalized });
@@ -449,6 +470,8 @@ export const DesktopIsland: React.FC<{
         return `AirDrop: ${state.peerName}`;
       case 'transferring':
         return `${state.isIncoming ? '⬇' : '⬆'} ${pct}% · ${fmtSpeed(state.speedBytesPerSec)}`;
+      case 'verifying':
+        return '⏳ Verifying SHA-256...';
       case 'completed':
         return '✓ Transfer Complete';
       case 'failed':
@@ -467,6 +490,8 @@ export const DesktopIsland: React.FC<{
         return '#38BDF8';
       case 'transferring':
         return '#60A5FA';
+      case 'verifying':
+        return '#A855F7';
       case 'completed':
         return '#4ADE80';
       case 'failed':
@@ -560,6 +585,18 @@ export const DesktopIsland: React.FC<{
             </svg>
           )}
 
+          {state.phase === 'verifying' && (
+            <span
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: '#A855F7',
+                animation: 'island-pulse 1s infinite ease-in-out',
+              }}
+            />
+          )}
+
           {state.phase === 'discovering' && (
             <div
               style={{
@@ -605,6 +642,8 @@ export const DesktopIsland: React.FC<{
               <div style={{ fontSize: 16, fontWeight: 700, color: '#FFFFFF', lineHeight: 1.2 }}>
                 {state.phase === 'waiting_approval'
                   ? 'AirDrop'
+                  : state.phase === 'verifying'
+                  ? 'Verifying Integrity...'
                   : state.phase === 'transferring'
                   ? state.isIncoming ? 'AirDrop Receiving...' : 'AirDrop Sending...'
                   : state.phase === 'completed'
@@ -631,6 +670,8 @@ export const DesktopIsland: React.FC<{
                   ? `${state.peerName} would like to share "${state.fileName}"`
                   : state.phase === 'transferring'
                   ? state.fileName
+                  : state.phase === 'verifying'
+                  ? state.fileName
                   : state.phase === 'completed'
                   ? state.fileName
                   : state.phase === 'failed'
@@ -644,6 +685,8 @@ export const DesktopIsland: React.FC<{
               <div style={{ fontSize: 11, color: '#636366', marginTop: 1 }}>
                 {state.phase === 'waiting_approval' || state.phase === 'transferring'
                   ? `${fmtBytes(state.fileSizeBytes)} • Direct Wi-Fi`
+                  : state.phase === 'verifying'
+                  ? 'SHA-256 Checksum • Validating'
                   : state.phase === 'completed'
                   ? `${fmtBytes(state.fileSizeBytes)} • SHA-256 Verified`
                   : state.phase === 'discovering'
@@ -676,26 +719,29 @@ export const DesktopIsland: React.FC<{
             </div>
           </div>
 
-          {/* Middle: Transfer Progress Bar (when transferring) */}
-          {state.phase === 'transferring' && (
+          {/* Middle: Transfer Progress Bar (when transferring or verifying) */}
+          {(state.phase === 'transferring' || state.phase === 'verifying') && (
             <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
               <div style={{ height: 6, background: '#2C2C2E', borderRadius: 9999, overflow: 'hidden' }}>
                 <div
                   style={{
                     height: '100%',
-                    width: `${pct}%`,
-                    background: 'linear-gradient(90deg, #007AFF, #38BDF8)',
+                    width: state.phase === 'verifying' ? '100%' : `${pct}%`,
+                    background: state.phase === 'verifying' ? 'linear-gradient(90deg, #A855F7, #38BDF8)' : 'linear-gradient(90deg, #007AFF, #38BDF8)',
                     borderRadius: 9999,
                     transition: 'width .25s ease',
+                    animation: state.phase === 'verifying' ? 'island-pulse 1.2s infinite ease-in-out' : undefined,
                   }}
                 />
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontSize: 11.5, color: '#8E8E93' }}>
-                  {fmtBytes(state.transferredBytes)} / {fmtBytes(state.fileSizeBytes)} • {pct}%
+                  {state.phase === 'verifying'
+                    ? `${fmtBytes(state.fileSizeBytes)} • Cryptographic Verification`
+                    : `${fmtBytes(state.transferredBytes)} / ${fmtBytes(state.fileSizeBytes)} • ${pct}%`}
                 </span>
                 <span style={{ fontSize: 11.5, fontWeight: 700, color: '#FFFFFF' }}>
-                  ⚡ {fmtSpeed(state.speedBytesPerSec)}
+                  {state.phase === 'verifying' ? '⏳ Verifying' : `⚡ ${fmtSpeed(state.speedBytesPerSec)}`}
                 </span>
               </div>
             </div>

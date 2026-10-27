@@ -1,6 +1,6 @@
 use crate::identity::IdentityManager;
 use crate::models::{
-    ChatMessage, PrepareUploadRequest, PrepareUploadResponse, TransferProgressPayload,
+    ChatMessage, PrepareUploadRequest, PrepareUploadResponse, TransferCheckpoint, TransferProgressPayload,
 };
 use axum::{
     body::Body,
@@ -75,6 +75,45 @@ pub fn resolve_unique_destination(dir: &Path, file_name: &str) -> PathBuf {
     }
 }
 
+/// Queries the available free disk space (in bytes) on the target filesystem volume.
+#[cfg(windows)]
+pub fn get_available_disk_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let mut free_bytes_available: u64 = 0;
+    let mut total_number_of_bytes: u64 = 0;
+    let mut total_number_of_free_bytes: u64 = 0;
+
+    extern "system" {
+        fn GetDiskFreeSpaceExW(
+            lpDirectoryName: *const u16,
+            lpFreeBytesAvailableToCaller: *mut u64,
+            lpTotalNumberOfBytes: *mut u64,
+            lpTotalNumberOfFreeBytes: *mut u64,
+        ) -> i32;
+    }
+
+    let success = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut free_bytes_available,
+            &mut total_number_of_bytes,
+            &mut total_number_of_free_bytes,
+        )
+    };
+
+    if success != 0 {
+        Some(free_bytes_available)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(windows))]
+pub fn get_available_disk_space(_path: &Path) -> Option<u64> {
+    None
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionMetadata {
     pub transfer_id: String,
@@ -90,6 +129,8 @@ pub struct SessionMetadata {
     pub is_first_contact: bool,
     pub is_consumed: bool,
     pub session_key: [u8; 32],
+    pub resume_offset: Option<u64>,
+    pub resume_chunk_index: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -372,21 +413,37 @@ impl TransferService {
         // Clean URL: Token and transfer ID removed from query string per security requirements
         let upload_url = format!("http://{}:{}/api/auradrop/v1/upload", peer_ip, peer_port);
 
-        let file_async = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
+        let mut file_async = tokio::fs::File::open(&path).await.map_err(|e| e.to_string())?;
+        let mut initial_transferred = 0u64;
+        let mut initial_chunk_counter = 0u64;
+
+        if let Some(offset) = prep_data.resume_offset {
+            if offset > 0 && offset < file_size {
+                use tokio::io::AsyncSeekExt;
+                let _ = file_async.seek(std::io::SeekFrom::Start(offset)).await;
+                initial_transferred = offset;
+                initial_chunk_counter = prep_data.resume_chunk_index.unwrap_or(0);
+                crate::log_debug(&format!(
+                    "[AuraTransfer] Outbound transfer {} resuming from byte offset {} (chunk {})",
+                    transfer_id, offset, initial_chunk_counter
+                ));
+            }
+        }
+
         let self_clone = self.clone();
         let transfer_id_clone = transfer_id.clone();
         let file_name_clone = file_name.clone();
         let peer_name_clone = peer_name.clone();
         let file_path_clone = file_path_str.clone();
 
-        let mut transferred = 0u64;
+        let mut transferred = initial_transferred;
         let mut last_emit = Instant::now();
         let mut last_speed_time = Instant::now();
-        let mut last_speed_bytes = 0u64;
+        let mut last_speed_bytes = initial_transferred;
         let mut smoothed_speed = 0.0f64;
 
         let tid_for_stream = transfer_id.clone();
-        let mut chunk_counter = 0u64;
+        let mut chunk_counter = initial_chunk_counter;
 
         // Bounded 512 KiB streaming chunks with AES-256-GCM AEAD authenticated encryption
         let reader_stream = tokio_util::io::ReaderStream::with_capacity(file_async, 512 * 1024).map(move |item| {
@@ -416,7 +473,11 @@ impl TransferService {
                             0
                         };
                         let percent = if file_size > 0 {
-                            (transferred as f64 / file_size as f64) * 100.0
+                            if transferred >= file_size {
+                                99.9 // Capped until destination finalization and verification
+                            } else {
+                                (transferred as f64 / file_size as f64) * 100.0
+                            }
                         } else {
                             100.0
                         };
@@ -437,7 +498,7 @@ impl TransferService {
                                 eta_seconds: eta,
                                 is_incoming: false,
                                 status: if transferred >= file_size {
-                                    "completed".to_string()
+                                    "verifying".to_string()
                                 } else {
                                     "transferring".to_string()
                                 },
@@ -484,6 +545,12 @@ impl TransferService {
             .header("x-file-name", &file_name)
             .header("x-file-size", file_size.to_string())
             .header("x-sha256", &sha256_hash);
+
+        if initial_transferred > 0 {
+            req_builder = req_builder
+                .header("x-resume-offset", initial_transferred.to_string())
+                .header("x-chunk-index", initial_chunk_counter.to_string());
+        }
 
         if is_aead {
             req_builder = req_builder.header("x-encryption", "aead-aes256-gcm");
@@ -697,6 +764,62 @@ async fn handle_prepare_upload(
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Filename must not be empty"})),
         ));
+    }
+
+    // Pre-flight disk space check: reject early with HTTP 507 if recipient volume lacks space
+    if let Some(available_bytes) = get_available_disk_space(&service.downloads_dir) {
+        if available_bytes < (payload.file_size + 10 * 1024 * 1024) {
+            crate::log_debug(&format!(
+                "[PrepareUpload] Insufficient storage: required {} bytes, available {} bytes",
+                payload.file_size, available_bytes
+            ));
+            return Err((
+                StatusCode::INSUFFICIENT_STORAGE,
+                Json(json!({
+                    "error": "Insufficient disk space on recipient device",
+                    "requiredBytes": payload.file_size,
+                    "availableBytes": available_bytes,
+                    "accepted": false
+                })),
+            ));
+        }
+    }
+
+    // Checkpoint & resume negotiation
+    let safe_base_name = sanitize_filename(&payload.file_name);
+    let part_path = service.downloads_dir.join(format!(".{}.{}.part", safe_base_name, payload.transfer_id));
+    let resume_meta_path = service.downloads_dir.join(format!(".{}.{}.resume.json", safe_base_name, payload.transfer_id));
+
+    let mut resume_offset: Option<u64> = None;
+    let mut resume_chunk_index: Option<u64> = None;
+
+    if resume_meta_path.exists() && part_path.exists() {
+        if let Ok(meta_bytes) = fs::read(&resume_meta_path) {
+            if let Ok(ckpt) = serde_json::from_slice::<TransferCheckpoint>(&meta_bytes) {
+                let actual_part_len = fs::metadata(&part_path).map(|m| m.len()).unwrap_or(0);
+                if ckpt.file_size == payload.file_size
+                    && (ckpt.sha256_expected.is_empty() || payload.sha256.is_empty() || ckpt.sha256_expected == payload.sha256)
+                    && ckpt.sender_id == payload.sender_user_id
+                    && actual_part_len >= ckpt.bytes_committed
+                    && ckpt.bytes_committed > 0
+                    && ckpt.bytes_committed < payload.file_size
+                {
+                    crate::log_debug(&format!(
+                        "[PrepareUpload] Valid resume checkpoint found for transfer {}: resuming from {} bytes (chunk {})",
+                        payload.transfer_id, ckpt.bytes_committed, ckpt.chunk_index
+                    ));
+                    resume_offset = Some(ckpt.bytes_committed);
+                    resume_chunk_index = Some(ckpt.chunk_index);
+                } else {
+                    crate::log_debug(&format!(
+                        "[PrepareUpload] Incompatible or stale checkpoint for transfer {}: resetting",
+                        payload.transfer_id
+                    ));
+                    let _ = fs::remove_file(&resume_meta_path);
+                    let _ = fs::remove_file(&part_path);
+                }
+            }
+        }
     }
 
     let has_crypto = payload.sender_eph_pub_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
@@ -918,6 +1041,8 @@ async fn handle_prepare_upload(
         is_first_contact,
         is_consumed: false,
         session_key,
+        resume_offset,
+        resume_chunk_index,
     };
 
     service
@@ -932,8 +1057,8 @@ async fn handle_prepare_upload(
         "***".to_string()
     };
     crate::log_debug(&format!(
-        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}, SAS: {:?}]",
-        payload.file_name, payload.file_size, sender_name, masked_token, sas_code
+        "[AuraTransfer] Prepare-upload accepted: {} ({} bytes) from {} [Protocol: TCP, Token: {}, SAS: {:?}, ResumeOffset: {:?}]",
+        payload.file_name, payload.file_size, sender_name, masked_token, sas_code, resume_offset
     ));
 
     let file_id = payload
@@ -956,6 +1081,8 @@ async fn handle_prepare_upload(
         is_first_contact: Some(is_first_contact),
         quic_port: None,
         cert_fingerprint: None,
+        resume_offset,
+        resume_chunk_index,
     }))
 }
 
@@ -1072,15 +1199,63 @@ async fn handle_upload(
     let temp_file_path = service
         .downloads_dir
         .join(format!(".{}.{}.part", safe_base_name, session.transfer_id));
+    let resume_meta_path = service
+        .downloads_dir
+        .join(format!(".{}.{}.resume.json", safe_base_name, session.transfer_id));
 
-    // Open temporary file with Tokio async I/O
-    let temp_file = match tokio::fs::File::create(&temp_file_path).await {
-        Ok(f) => f,
-        Err(e) => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": format!("Cannot initialize temp file on disk: {}", e)})),
-            ));
+    let mut hasher = Sha256::new();
+    let mut transferred = 0u64;
+    let mut chunk_index = 0u64;
+
+    // Checkpoint resume: if session contains verified resume offset, pre-hash already committed disk prefix
+    if let Some(res_off) = session.resume_offset {
+        if res_off > 0 && temp_file_path.exists() {
+            if let Ok(mut existing_file) = File::open(&temp_file_path) {
+                let mut prefix_buf = vec![0u8; 512 * 1024];
+                let mut prefix_read = 0u64;
+                while prefix_read < res_off {
+                    let to_read = (res_off - prefix_read).min(prefix_buf.len() as u64) as usize;
+                    match existing_file.read(&mut prefix_buf[..to_read]) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            hasher.update(&prefix_buf[..n]);
+                            prefix_read += n as u64;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                if prefix_read == res_off {
+                    transferred = res_off;
+                    chunk_index = session.resume_chunk_index.unwrap_or(0);
+                    crate::log_debug(&format!(
+                        "[AuraTransfer] Inbound resume: pre-hashed {} prefix bytes (resuming chunk index {})",
+                        transferred, chunk_index
+                    ));
+                }
+            }
+        }
+    }
+
+    // Open temporary file: append if resumed from validated prefix, else create fresh
+    let temp_file = if transferred > 0 {
+        match tokio::fs::OpenOptions::new().create(true).append(true).open(&temp_file_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("Cannot open part file for resume append: {}", e)})),
+                ));
+            }
+        }
+    } else {
+        match tokio::fs::File::create(&temp_file_path).await {
+            Ok(f) => f,
+            Err(e) => {
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error": format!("Cannot initialize temp file on disk: {}", e)})),
+                ));
+            }
         }
     };
 
@@ -1094,22 +1269,33 @@ async fn handle_upload(
 
     // Bounded buffer for backpressured async disk writing (512 KiB)
     let mut writer = tokio::io::BufWriter::with_capacity(512 * 1024, temp_file);
-    let mut hasher = Sha256::new();
-    let mut transferred = 0u64;
     let mut last_emit = Instant::now();
     let mut last_speed_time = Instant::now();
-    let mut last_speed_bytes = 0u64;
+    let mut last_speed_bytes = transferred;
     let mut smoothed_speed = 0.0f64;
 
     let mut stream = body.into_data_stream();
     let mut stream_buf = Vec::with_capacity(8 * 1024 * 1024);
-    let mut chunk_index = 0u64;
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
             Ok(c) => c,
             Err(e) => {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                if transferred > 0 && transferred < session.file_size {
+                    let ckpt = TransferCheckpoint {
+                        transfer_id: session.transfer_id.clone(),
+                        file_name: session.file_name.clone(),
+                        file_size: session.file_size,
+                        sha256_expected: session.sha256_expected.clone(),
+                        sender_id: session.sender_id.clone(),
+                        bytes_committed: transferred,
+                        chunk_index,
+                        updated_at: Utc::now().timestamp_millis(),
+                    };
+                    if let Ok(ckpt_bytes) = serde_json::to_vec_pretty(&ckpt) {
+                        let _ = fs::write(&resume_meta_path, ckpt_bytes);
+                    }
+                }
                 service.sessions.write().await.remove(&transfer_id);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1121,7 +1307,21 @@ async fn handle_upload(
         if !is_aead {
             // High-speed direct streaming: stream raw bytes straight to disk buffer
             if let Err(e) = writer.write_all(&chunk).await {
-                let _ = tokio::fs::remove_file(&temp_file_path).await;
+                if transferred > 0 && transferred < session.file_size {
+                    let ckpt = TransferCheckpoint {
+                        transfer_id: session.transfer_id.clone(),
+                        file_name: session.file_name.clone(),
+                        file_size: session.file_size,
+                        sha256_expected: session.sha256_expected.clone(),
+                        sender_id: session.sender_id.clone(),
+                        bytes_committed: transferred,
+                        chunk_index,
+                        updated_at: Utc::now().timestamp_millis(),
+                    };
+                    if let Ok(ckpt_bytes) = serde_json::to_vec_pretty(&ckpt) {
+                        let _ = fs::write(&resume_meta_path, ckpt_bytes);
+                    }
+                }
                 service.sessions.write().await.remove(&transfer_id);
                 return Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1139,6 +1339,7 @@ async fn handle_upload(
                 // Validate payload bounds: max 8 MiB chunk + 16-byte tag, min 16-byte tag
                 if payload_len < 16 || payload_len > (8 * 1024 * 1024 + 16) {
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    let _ = tokio::fs::remove_file(&resume_meta_path).await;
                     service.sessions.write().await.remove(&transfer_id);
                     return Err((
                         StatusCode::BAD_REQUEST,
@@ -1161,6 +1362,7 @@ async fn handle_upload(
                 ]);
                 if chunk_seq != chunk_index {
                     let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    let _ = tokio::fs::remove_file(&resume_meta_path).await;
                     service.sessions.write().await.remove(&transfer_id);
                     return Err((
                         StatusCode::BAD_REQUEST,
@@ -1180,6 +1382,7 @@ async fn handle_upload(
                     Ok(pt) => pt,
                     Err(e) => {
                         let _ = tokio::fs::remove_file(&temp_file_path).await;
+                        let _ = tokio::fs::remove_file(&resume_meta_path).await;
                         service.sessions.write().await.remove(&transfer_id);
                         return Err((
                             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1189,7 +1392,21 @@ async fn handle_upload(
                 };
 
                 if let Err(e) = writer.write_all(&plaintext).await {
-                    let _ = tokio::fs::remove_file(&temp_file_path).await;
+                    if transferred > 0 && transferred < session.file_size {
+                        let ckpt = TransferCheckpoint {
+                            transfer_id: session.transfer_id.clone(),
+                            file_name: session.file_name.clone(),
+                            file_size: session.file_size,
+                            sha256_expected: session.sha256_expected.clone(),
+                            sender_id: session.sender_id.clone(),
+                            bytes_committed: transferred,
+                            chunk_index,
+                            updated_at: Utc::now().timestamp_millis(),
+                        };
+                        if let Ok(ckpt_bytes) = serde_json::to_vec_pretty(&ckpt) {
+                            let _ = fs::write(&resume_meta_path, ckpt_bytes);
+                        }
+                    }
                     service.sessions.write().await.remove(&transfer_id);
                     return Err((
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1207,6 +1424,7 @@ async fn handle_upload(
 
         if transferred > session.file_size {
             let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&resume_meta_path).await;
             service.sessions.write().await.remove(&transfer_id);
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -1237,7 +1455,11 @@ async fn handle_upload(
                 0
             };
             let percent = if session.file_size > 0 {
-                (transferred as f64 / session.file_size as f64) * 100.0
+                if transferred >= session.file_size {
+                    99.9 // Verifying state before final integrity match and commit
+                } else {
+                    (transferred as f64 / session.file_size as f64) * 100.0
+                }
             } else {
                 100.0
             };
@@ -1253,17 +1475,13 @@ async fn handle_upload(
                     eta_seconds: eta,
                     is_incoming: true,
                     status: if transferred >= session.file_size {
-                        "completed".to_string()
+                        "verifying".to_string()
                     } else {
                         "transferring".to_string()
                     },
                     peer_name: session.sender_name.clone(),
                     error: None,
-                    file_path: if transferred >= session.file_size {
-                        Some(final_dest.to_string_lossy().to_string())
-                    } else {
-                        None
-                    },
+                    file_path: None,
                     sas_code: None,
                     is_first_contact: None,
                 })
@@ -1274,6 +1492,7 @@ async fn handle_upload(
     // Flush and sync buffer to physical disk
     if let Err(e) = writer.flush().await {
         let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
         service.sessions.write().await.remove(&transfer_id);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1285,6 +1504,7 @@ async fn handle_upload(
     // Verify exact length
     if transferred != session.file_size {
         let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
         service.sessions.write().await.remove(&transfer_id);
         return Err((
             StatusCode::BAD_REQUEST,
@@ -1298,6 +1518,7 @@ async fn handle_upload(
     if !sha_expected.is_empty() && !sha_expected.starts_with("stream_") {
         if !calculated_hash.eq_ignore_ascii_case(sha_expected) {
             let _ = tokio::fs::remove_file(&temp_file_path).await;
+            let _ = tokio::fs::remove_file(&resume_meta_path).await;
             service.sessions.write().await.remove(&transfer_id);
             return Err((
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -1313,12 +1534,16 @@ async fn handle_upload(
     // Atomic rename from temporary file to final committed path
     if let Err(e) = tokio::fs::rename(&temp_file_path, &final_dest).await {
         let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
         service.sessions.write().await.remove(&transfer_id);
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("Failed to atomically commit destination file: {}", e)})),
         ));
     }
+
+    // Successful finalization: remove resume metadata checkpoint
+    let _ = tokio::fs::remove_file(&resume_meta_path).await;
 
     // Trust on First Use: Mark verified sender as trusted upon successful transfer completion
     if session.is_first_contact {

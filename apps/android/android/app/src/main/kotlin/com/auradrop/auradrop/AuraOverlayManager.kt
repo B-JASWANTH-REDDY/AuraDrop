@@ -457,6 +457,29 @@ class AuraOverlayManager private constructor(private val context: Context) {
         }
     }
 
+    fun showVerifyingState(fileName: String, totalBytes: Long) {
+        mainHandler.post {
+            val view = currentOverlayView ?: return@post
+            try {
+                val tvTitle = view.findViewById<TextView>(R.id.tv_title)
+                val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
+                val tvStatusBadge = view.findViewById<TextView>(R.id.tv_status_badge)
+                val pbTransfer = view.findViewById<ProgressBar>(R.id.pb_transfer)
+                val tvStats = view.findViewById<TextView>(R.id.tv_transfer_stats)
+                val tvSpeed = view.findViewById<TextView>(R.id.tv_transfer_speed)
+
+                tvTitle.text = "Verifying Integrity..."
+                tvSubtitle.text = fileName
+                tvStatusBadge.text = "SHA-256 Checksum"
+                pbTransfer.progress = 99
+                tvStats.text = "${formatBytes(totalBytes)} • Validating"
+                tvSpeed.text = "⏳ Verifying"
+            } catch (e: Exception) {
+                Log.e(TAG, "Error updating verifying state in overlay: ${e.message}")
+            }
+        }
+    }
+
     fun markTransferComplete(fileName: String, totalBytes: Long) {
         mainHandler.post {
             val view = currentOverlayView ?: return@post
