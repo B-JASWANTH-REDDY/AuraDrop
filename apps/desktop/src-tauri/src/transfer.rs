@@ -790,10 +790,12 @@ async fn handle_prepare_upload(
     service.pending_verifications.write().await.insert(payload.transfer_id.clone(), decision_tx);
 
     if let Some(ref handle) = service.app_handle {
+        if let Some(island) = handle.get_webview_window("island") {
+            let _ = island.show();
+            let _ = island.set_always_on_top(true);
+        }
         if let Some(window) = handle.get_webview_window("main") {
-            let _ = window.show();
-            let _ = window.unminimize();
-            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
         }
         let _ = handle.emit("incoming-share", json!({
             "transferId": payload.transfer_id,
@@ -1107,7 +1109,7 @@ async fn handle_upload(
     let mut smoothed_speed = 0.0f64;
 
     let mut stream = body.into_data_stream();
-    let mut stream_buf = Vec::with_capacity(1024 * 1024);
+    let mut stream_buf = Vec::with_capacity(8 * 1024 * 1024);
     let mut chunk_index = 0u64;
 
     while let Some(chunk_result) = stream.next().await {
@@ -1128,8 +1130,8 @@ async fn handle_upload(
         while stream_buf.len() >= 16 {
             let payload_len = u32::from_be_bytes([stream_buf[0], stream_buf[1], stream_buf[2], stream_buf[3]]) as usize;
             
-            // Validate payload bounds: max 1 MiB chunk + 16-byte tag, min 16-byte tag
-            if payload_len < 16 || payload_len > (1024 * 1024 + 16) {
+            // Validate payload bounds: max 8 MiB chunk + 16-byte tag, min 16-byte tag
+            if payload_len < 16 || payload_len > (8 * 1024 * 1024 + 16) {
                 let _ = tokio::fs::remove_file(&temp_file_path).await;
                 service.sessions.write().await.remove(&transfer_id);
                 return Err((
@@ -1358,7 +1360,9 @@ async fn handle_upload(
 #[serde(rename_all = "camelCase")]
 struct IncomingChatMessage {
     pub id: Option<String>,
+    #[serde(alias = "sender_id", alias = "peerId", alias = "peer_id")]
     pub sender_id: Option<String>,
+    #[serde(alias = "sender_name", alias = "peerName", alias = "peer_name")]
     pub sender_name: Option<String>,
     pub text: String,
     pub timestamp: Option<i64>,
@@ -1391,6 +1395,10 @@ async fn handle_chat(
 
     if let Some(ref handle) = service.app_handle {
         let _ = handle.emit("chat-message-received", &msg);
+        if let Some(island) = handle.get_webview_window("island") {
+            let _ = island.show();
+            let _ = island.set_always_on_top(true);
+        }
         if let Some(window) = handle.get_webview_window("main") {
             let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
         }

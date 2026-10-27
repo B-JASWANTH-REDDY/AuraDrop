@@ -109,8 +109,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            if (!canDrawOverlays()) {
-                Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
+            if (!canDrawOverlays() || isAppInForeground) {
                 return@post
             }
 
@@ -206,8 +205,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            if (!canDrawOverlays()) {
-                Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
+            if (!canDrawOverlays() || isAppInForeground) {
                 return@post
             }
 
@@ -289,7 +287,7 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            if (!canDrawOverlays()) {
+            if (!canDrawOverlays() || isAppInForeground) {
                 return@post
             }
 
@@ -360,7 +358,12 @@ class AuraOverlayManager private constructor(private val context: Context) {
         onCancel: (() -> Unit)? = null
     ) {
         mainHandler.post {
-            if (!canDrawOverlays()) return@post
+            if (!canDrawOverlays() || isAppInForeground) {
+                if (isAppInForeground && currentOverlayView != null) {
+                    dismissCurrentOverlay()
+                }
+                return@post
+            }
 
             val view = currentOverlayView
             if (view != null && activeTransferId == transferId) {

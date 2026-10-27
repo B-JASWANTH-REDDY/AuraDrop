@@ -4,7 +4,7 @@ use crate::models::{ChatMessage, LocalDeviceInfo, PeerDevice, SelectedFileInfo};
 use crate::network::NetworkManager;
 use crate::transfer::{TransferService, TRANSFER_PORT};
 use std::fs;
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 
 pub struct AppState {
     pub identity: IdentityManager,
@@ -145,16 +145,27 @@ pub async fn send_chat_message(
         peer_id, peer_ip, peer_port
     ));
 
-    let (ip, port, name) = if let (Some(ip_str), Some(p)) = (peer_ip, peer_port) {
+    let clean_ip = peer_ip.and_then(|s| {
+        let t = s.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+    let clean_port = peer_port.and_then(|p| if p > 0 { Some(p) } else { None });
+
+    let (ip, port, name) = if let (Some(ip_str), Some(p)) = (clean_ip.clone(), clean_port) {
         let name_str = peer_name.unwrap_or_else(|| "Peer".to_string());
         (ip_str, p, name_str)
     } else {
         let peers = state.discovery.get_peers().await;
-        let peer = peers
-            .into_iter()
-            .find(|p| p.id == peer_id)
-            .ok_or_else(|| "Peer device not found in active discovery cache".to_string())?;
-        (peer.ip, peer.port, peer.name)
+        if let Some(peer) = peers.into_iter().find(|p| p.id == peer_id || p.ip == peer_id) {
+            let port = if peer.port > 0 { peer.port } else { TRANSFER_PORT };
+            (peer.ip, port, peer.name)
+        } else if let Some(fallback_ip) = clean_ip {
+            let port = clean_port.unwrap_or(TRANSFER_PORT);
+            let name_str = peer_name.unwrap_or_else(|| "Peer".to_string());
+            (fallback_ip, port, name_str)
+        } else {
+            return Err("Peer device not found in active discovery cache. Make sure both devices are on the same Wi-Fi.".to_string());
+        }
     };
 
     state
@@ -403,10 +414,31 @@ pub async fn confirm_transfer_verification(
 }
 
 #[tauri::command]
-pub async fn show_main_window(window: tauri::Window) -> Result<(), String> {
-    let _ = window.unminimize();
-    let _ = window.show();
-    let _ = window.set_focus();
+pub async fn show_main_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_chat_window(app: tauri::AppHandle, peer_id: String) -> Result<(), String> {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+        let _ = main.emit("open-chat-peer", peer_id);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_island_size(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if let Some(island) = app.get_webview_window("island") {
+        let _ = island.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
+    }
     Ok(())
 }
 

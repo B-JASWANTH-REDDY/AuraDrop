@@ -119,17 +119,22 @@ class NativeBridgeService {
   // File Picker
   static Future<List<PickedFileMeta>> pickFiles() async {
     try {
-      final result = await FilePicker.pickFiles();
-      if (result.isNotEmpty) {
-        return result.where((f) => f.path != null).map((f) {
-          final file = File(f.path!);
+      final files = await FilePicker.pickFiles();
+      if (files.isNotEmpty) {
+        return files.map((f) {
+          final p = f.path ?? '';
+          final file = p.isNotEmpty ? File(p) : null;
+          final size = file != null && file.existsSync()
+              ? file.lengthSync()
+              : (f.lengthSync() ?? 0);
+          final uriStr = f.uri.toString();
           return PickedFileMeta(
             id: 'file_${DateTime.now().millisecondsSinceEpoch}_${f.name.hashCode}',
             name: f.name,
-            size: (file.existsSync() ? file.lengthSync() : 0),
-            customPath: f.path!,
+            size: size,
+            customPath: p,
             mimeType: 'application/octet-stream',
-            uri: f.path!,
+            uri: uriStr.isNotEmpty ? uriStr : p,
           );
         }).toList();
       }
@@ -667,11 +672,11 @@ class NativeBridgeService {
   static Future<String?> pickAvatarImage() async {
     if (!Platform.isAndroid) {
       try {
-        final result = await FilePicker.pickFiles(
+        final file = await FilePicker.pickFile(
           type: FileType.image,
         );
-        if (result.isNotEmpty) {
-          return result.first.path;
+        if (file != null && file.path != null) {
+          return file.path;
         }
       } catch (_) {}
       return null;

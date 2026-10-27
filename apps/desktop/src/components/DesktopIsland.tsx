@@ -250,7 +250,8 @@ if (typeof document !== 'undefined' && !document.getElementById('__ai_island_sty
 export const DesktopIsland: React.FC<{
   onOpenMain: () => void;
   onOpenChat?: (peerId: string) => void;
-}> = ({ onOpenMain, onOpenChat }) => {
+  isOverlayWindow?: boolean;
+}> = ({ onOpenMain, onOpenChat, isOverlayWindow = false }) => {
   const [state, dispatch] = useReducer(islandReducer, initialState);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -258,6 +259,18 @@ export const DesktopIsland: React.FC<{
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => dispatch({ type: 'DISMISS' }), ms);
   }, []);
+
+  useEffect(() => {
+    if (!isOverlayWindow) return;
+    const isExpanded =
+      state.phase === 'waiting_approval' ||
+      state.phase === 'transferring' ||
+      state.phase === 'completed' ||
+      state.phase === 'message';
+    const targetW = isExpanded ? 460 : 280;
+    const targetH = isExpanded ? 310 : 52;
+    invoke('set_island_size', { width: targetW, height: targetH }).catch(() => {});
+  }, [state.phase, isOverlayWindow]);
 
   useEffect(() => {
     if (state.phase === 'completed') scheduleCollapse(7000);
@@ -899,4 +912,35 @@ export const DesktopIsland: React.FC<{
     </div>
   );
 };
+
+// ── Standalone Desktop Island Overlay (for system-wide background window) ───
+export const DesktopIslandOverlay: React.FC = () => {
+  const handleOpenMain = () => {
+    invoke('show_main_window').catch(() => {});
+  };
+
+  const handleOpenChat = (peerId: string) => {
+    invoke('open_chat_window', { peerId }).catch(() => {});
+  };
+
+  return (
+    <div
+      style={{
+        width: '100vw',
+        height: '100vh',
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'flex-start',
+        paddingTop: 4,
+        background: 'transparent',
+        overflow: 'hidden',
+        userSelect: 'none',
+      }}
+    >
+      <DesktopIsland onOpenMain={handleOpenMain} onOpenChat={handleOpenChat} isOverlayWindow={true} />
+    </div>
+  );
+};
+
 export default DesktopIsland;
+

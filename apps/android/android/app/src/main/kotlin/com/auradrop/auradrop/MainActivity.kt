@@ -637,7 +637,7 @@ class MainActivity : FlutterActivity() {
         private const val LEGACY_DISCOVERY_GROUP = "239.255.48.29"
         private const val LEGACY_DISCOVERY_PORT = 48290
         private const val LEGACY_TRANSFER_PORT = 48291
-        private const val SOCKET_BUFFER_SIZE = 4 * 1024 * 1024 // 4 MB buffer for 100MB/s wire throughput
+        private const val SOCKET_BUFFER_SIZE = 1024 * 1024 // 1 MB high-throughput buffer for 100MB/s wire throughput
         private const val PROGRESS_EVENT_INTERVAL_MS = 90L // ~11 UI updates/sec to avoid IPC bottleneck
         const val INCOMING_REQUEST_CHANNEL_ID = "auradrop_incoming_requests"
         const val CHAT_NOTIFICATION_CHANNEL_ID = "auradrop_chat_messages"
@@ -784,6 +784,7 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         isAppInForeground = true
         AuraOverlayManager.getInstance(this).isAppInForeground = true
+        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
         if (!AuraOverlayManager.getInstance(this).canDrawOverlays()) {
             mainHandler.postDelayed({
                 AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
@@ -852,6 +853,9 @@ class MainActivity : FlutterActivity() {
             if (collectedUris.isNotEmpty()) {
                 val files = mutableListOf<Map<String, Any>>()
                 for (u in collectedUris) {
+                    try {
+                        contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (_: Exception) {}
                     getFileMeta(u)?.let { files.add(it) }
                 }
                 if (files.isNotEmpty()) {
@@ -1315,10 +1319,16 @@ class MainActivity : FlutterActivity() {
                 if (clipData != null) {
                     for (i in 0 until clipData.itemCount) {
                         val uri = clipData.getItemAt(i).uri
+                        try {
+                            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        } catch (_: Exception) {}
                         getFileMeta(uri)?.let { selectedFiles.add(it) }
                     }
                 } else if (data.data != null) {
                     val uri = data.data!!
+                    try {
+                        contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    } catch (_: Exception) {}
                     getFileMeta(uri)?.let { selectedFiles.add(it) }
                 }
             }
@@ -3454,9 +3464,9 @@ class MainActivity : FlutterActivity() {
 
                 startForegroundTransferService("Sending files...", 0)
 
-                // Turbo High-Speed Chunk Engine (Starts at 1 MB, scales up to 2 MB / 4 MB for 100MB/s wire speed)
-                var currentChunkSize = 1024 * 1024
-                var chunkBuffer = ByteArray(currentChunkSize)
+                // Turbo High-Speed Chunk Engine (1 MB fixed buffer for zero allocations, zero GC pressure, ultra-fast wire throughput)
+                val chunkSize = 1024 * 1024
+                val chunkBuffer = ByteArray(chunkSize)
                 var overallSent = 0L
                 val startTime = System.currentTimeMillis()
                 var lastEventTime = 0L
@@ -3513,20 +3523,7 @@ class MainActivity : FlutterActivity() {
                         val bufferedStream = BufferedInputStream(stream, SOCKET_BUFFER_SIZE)
 
                         while (fileSent < fileSize && !session.isCancelled.get()) {
-                            // Adapt chunk size dynamically based on wire throughput
-                            val elapsedNow = Math.max(0.1, (System.currentTimeMillis() - startTime) / 1000.0)
-                            val currentSpeed = overallSent / elapsedNow
-                            val targetChunkSize = when {
-                                currentSpeed > 50 * 1024 * 1024 -> 4 * 1024 * 1024 // 4 MB
-                                currentSpeed > 15 * 1024 * 1024 -> 2 * 1024 * 1024 // 2 MB
-                                else -> 1024 * 1024                                 // 1 MB
-                            }
-                            if (targetChunkSize != currentChunkSize) {
-                                currentChunkSize = targetChunkSize
-                                chunkBuffer = ByteArray(currentChunkSize)
-                            }
-
-                            val toRead = Math.min(currentChunkSize.toLong(), fileSize - fileSent).toInt()
+                            val toRead = Math.min(chunkSize.toLong(), fileSize - fileSent).toInt()
                             val bytesRead = bufferedStream.read(chunkBuffer, 0, toRead)
                             if (bytesRead <= 0) break
 
@@ -3661,12 +3658,12 @@ class MainActivity : FlutterActivity() {
                     "state" to "COMPLETED",
                     "verificationState" to "VERIFIED"
                 ))
-            } catch (e: Exception) {
-                Log.e(TAG, "Transfer send error: ${e.message}")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Transfer send error: ${t.message}", t)
                 stopForegroundTransferService()
                 sendEvent("transferError", mapOf(
                     "transferId" to transferId,
-                    "error" to (e.message ?: "Transfer error")
+                    "error" to (t.message ?: "Transfer error")
                 ))
             } finally {
                 socket?.close()

@@ -91,9 +91,36 @@ export const App: React.FC = () => {
       }
     });
 
+    // 5. Listen for open-chat-peer event from floating island
+    const unlistenOpenChat = listen<string>('open-chat-peer', (event) => {
+      const peerId = event.payload;
+      if (peerId) {
+        setPeers((currentPeers) => {
+          const found = currentPeers.find((p) => p.id === peerId);
+          if (found) {
+            setChatPeer(found);
+          } else {
+            setChatPeer({
+              id: peerId,
+              name: 'Nearby Device',
+              platform: 'device',
+              ip: '',
+              port: 53317,
+              status: 'online',
+              version: '2.0',
+              lastSeenMs: Date.now(),
+              isOnline: true,
+            });
+          }
+          return currentPeers;
+        });
+      }
+    });
+
     return () => {
       unlistenPeers.then((fn) => fn());
       unlistenTransfer.then((fn) => fn());
+      unlistenOpenChat.then((fn) => fn());
     };
   }, []);
 

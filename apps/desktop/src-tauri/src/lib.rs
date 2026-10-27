@@ -8,9 +8,10 @@ pub mod transfer;
 
 use commands::{
     cancel_transfer, check_for_updates, confirm_transfer_verification, get_all_chat_conversations,
-    get_chat_history, get_local_info, get_nearby_peers, open_downloads_folder, open_file,
-    open_url, pick_files, probe_device_ip, rescan_network, send_chat_message, send_files_to_peer,
-    set_device_name, show_file_in_folder, show_main_window, AppState,
+    get_chat_history, get_local_info, get_nearby_peers, open_chat_window, open_downloads_folder,
+    open_file, open_url, pick_files, probe_device_ip, rescan_network, send_chat_message,
+    send_files_to_peer, set_device_name, set_island_size, show_file_in_folder, show_main_window,
+    AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -55,6 +56,20 @@ pub fn run() {
                 d.start();
                 t.start_server();
 
+                // Position floating island window at top center of primary display
+                if let Some(island) = app.get_webview_window("island") {
+                    if let Ok(Some(monitor)) = island.primary_monitor() {
+                        let screen_size = monitor.size();
+                        let scale = monitor.scale_factor();
+                        let w = (280.0 * scale) as i32;
+                        let x = ((screen_size.width as i32) - w) / 2;
+                        let y = (14.0 * scale) as i32;
+                        let _ = island.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+                    }
+                    let _ = island.set_always_on_top(true);
+                    let _ = island.show();
+                }
+
                 app.manage(AppState {
                     identity,
                     discovery: d,
@@ -83,7 +98,9 @@ pub fn run() {
             show_file_in_folder,
             open_file,
             open_url,
-            show_main_window
+            show_main_window,
+            open_chat_window,
+            set_island_size
         ])
         .run(tauri::generate_context!());
 
