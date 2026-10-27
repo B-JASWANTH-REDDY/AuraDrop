@@ -51,6 +51,7 @@ export const CookieConsentBanner: React.FC<CookieConsentBannerProps> = ({ onOpen
   return (
     <aside
       aria-label="Privacy and Cookie Consent"
+      className="cookie-consent-aside"
       style={{
         position: 'fixed',
         bottom: '24px',

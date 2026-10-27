@@ -77,11 +77,12 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
         onClick={(e) => e.stopPropagation()}
       >
         <div
+          className="modal-header-container"
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '18px 24px',
+            padding: '16px 20px',
             borderBottom: `1px solid ${headerBorder}`,
           }}
         >
@@ -110,8 +111,9 @@ export const ModalWrapper: React.FC<ModalWrapperProps> = ({
         </div>
 
         <div
+          className="modal-body-container"
           style={{
-            padding: '24px',
+            padding: '20px',
             overflowY: 'auto',
             flex: 1,
             scrollbarWidth: 'thin',
@@ -1048,7 +1050,7 @@ export const DownloadsModal: React.FC<{
         </div>
 
         {/* Web Browser & Apple iOS/macOS */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px' }}>
           <div style={{ background: '#18181C', border: '1px solid #28282E', borderRadius: '16px', padding: '16px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
               <div style={{ width: '28px', height: '28px', borderRadius: '7px', background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#60a5fa', flexShrink: 0 }}>

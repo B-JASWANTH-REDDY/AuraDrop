@@ -398,6 +398,7 @@ export const App: React.FC = () => {
             {/* Quick Find (⌘K) Command Menu Trigger */}
             <button
               onClick={() => setIsCommandMenuOpen(true)}
+              className="desktop-btn cursor-pointer"
               title="Search & Commands (⌘K / Ctrl+K)"
               style={{
                 display: 'inline-flex',
@@ -789,7 +790,7 @@ export const App: React.FC = () => {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: '36px',
+                gap: windowWidth < 640 ? '14px 20px' : '36px',
                 flexWrap: 'wrap',
               }}
             >
@@ -846,15 +847,15 @@ export const App: React.FC = () => {
                 padding: '0 16px',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
                 <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: '#FF5F56' }} />
                 <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: '#FFBD2E' }} />
                 <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: '#27C93F' }} />
               </div>
-              <div style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255, 255, 255, 0.7)' }}>
-                AuraDrop Desktop · Dynamic Island &amp; Proximity Radar Demo
+              <div style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255, 255, 255, 0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: windowWidth < 640 ? '160px' : 'none', textAlign: 'center' }}>
+                {windowWidth < 640 ? 'AuraDrop Demo' : 'AuraDrop Desktop · Dynamic Island & Proximity Radar Demo'}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255, 255, 255, 0.45)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255, 255, 255, 0.45)', flexShrink: 0 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
               </div>
@@ -941,7 +942,7 @@ export const App: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       gap: '12px',
-                      flex: '1 1 200px',
+                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
                       boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
                     }}
                   >
@@ -967,7 +968,7 @@ export const App: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       gap: '12px',
-                      flex: '1 1 200px',
+                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
                     }}
                   >
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -990,7 +991,7 @@ export const App: React.FC = () => {
                       display: 'flex',
                       alignItems: 'center',
                       gap: '12px',
-                      flex: '1 1 200px',
+                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
                     }}
                   >
                     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1014,17 +1015,17 @@ export const App: React.FC = () => {
                   backgroundColor: 'rgba(255, 255, 255, 0.03)',
                   border: '1px solid rgba(255, 255, 255, 0.08)',
                   borderRadius: '14px',
-                  padding: '16px 20px',
+                  padding: windowWidth < 480 ? '14px 16px' : '16px 20px',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
                   <span style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>4K_Cinematic_Broll.mov</span>
                   <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 600 }}>82% · 1.8s remaining</span>
                 </div>
                 <div style={{ height: '6px', backgroundColor: 'rgba(255, 255, 255, 0.08)', borderRadius: '9999px', overflow: 'hidden', margin: '12px 0 10px' }}>
                   <div style={{ height: '100%', width: '82%', background: 'linear-gradient(90deg, #34C759, #30D158)', borderRadius: '9999px' }} />
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', fontSize: '11px', color: '#94a3b8' }}>
                   <span>3.7 GB of 4.5 GB transferred at 67.7 MB/s</span>
                   <span>SHA-256 Checksum Verified</span>
                 </div>
@@ -1136,22 +1137,22 @@ export const App: React.FC = () => {
            APP ARCHITECTURE SECTION
       ══════════════════════════════════════════════════════════════════════════ */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
-        <section id="architecture" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
-          <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
-            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
+        <section id="architecture" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
+          <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
+            <div style={{ textAlign: 'center', maxWidth: '720px', margin: windowWidth < 640 ? '0 auto 36px auto' : '0 auto 56px auto' }}>
               <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 System Architecture
               </div>
-              <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
+              <h2 style={{ fontSize: 'clamp(28px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
                 Built for native platform excellence.
               </h2>
-              <p style={{ fontSize: '17px', color: textMuted, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 'clamp(15px, 1.6vw, 17px)', color: textMuted, lineHeight: 1.6 }}>
                 AuraDrop is engineered with specialized native runtimes for Windows, Android, and Web, sharing a unified cryptographic protocol.
               </p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '20px' }}>
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <div className="architecture-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))', gap: '20px' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
                 <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="4" y="4" width="16" height="16" rx="2"/>
@@ -1166,22 +1167,22 @@ export const App: React.FC = () => {
                     <line x1="1" y1="14" x2="4" y2="14"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Tauri &amp; Rust Desktop Core</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Ultra-lean 5.96 MB Windows installer with negligible RAM usage, native Windows Dynamic Island overlay, and local socket server.</p>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '44px', display: 'flex', alignItems: 'center' }}>Tauri &amp; Rust Desktop Core</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: windowWidth < 640 ? 'auto' : '66px' }}>Ultra-lean 5.96 MB Windows installer with negligible RAM usage, native Windows Dynamic Island overlay, and local socket server.</p>
               </TiltCard>
 
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
                 <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(22, 163, 74, 0.15)' : '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
                     <line x1="12" y1="18" x2="12.01" y2="18"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Flutter &amp; Kotlin Android Engine</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Optimized foreground service, dynamic notification pill, direct port 8080 HTTP server, and automatic gallery integration.</p>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '44px', display: 'flex', alignItems: 'center' }}>Flutter &amp; Kotlin Android Engine</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: windowWidth < 640 ? 'auto' : '66px' }}>Optimized foreground service, dynamic notification pill, direct port 8080 HTTP server, and automatic gallery integration.</p>
               </TiltCard>
 
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
                 <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10"/>
@@ -1189,19 +1190,19 @@ export const App: React.FC = () => {
                     <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>Universal Web P2P Engine</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Peer-to-peer browser connectivity using WebRTC DataChannels with STUN/TURN traversal for cross-network file exchanges.</p>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '44px', display: 'flex', alignItems: 'center' }}>Universal Web P2P Engine</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: windowWidth < 640 ? 'auto' : '66px' }}>Peer-to-peer browser connectivity using WebRTC DataChannels with STUN/TURN traversal for cross-network file exchanges.</p>
               </TiltCard>
 
-              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
+              <TiltCard style={{ backgroundColor: cardBg, border: `1px solid ${borderSubtle}`, borderRadius: '16px', padding: windowWidth < 640 ? '20px 18px' : '28px', boxShadow: isDark ? '0 4px 16px rgba(0,0,0,0.4)' : '0 2px 8px rgba(0,0,0,0.03)', display: 'flex', flexDirection: 'column', height: '100%' }}>
                 <div style={{ width: '42px', height: '42px', borderRadius: '10px', backgroundColor: isDark ? 'rgba(255, 255, 255, 0.06)' : '#f8fafc', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px', border: `1px solid ${borderSubtle}` }}>
                   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={textPrimary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
                     <polyline points="9 12 11 14 15 10"/>
                   </svg>
                 </div>
-                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: '44px', display: 'flex', alignItems: 'center' }}>17-Point Regression Suite</h4>
-                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: '66px' }}>Automated tests continuously auditing path traversal sanitization, device identity binding, and SHA-256 byte integrity.</p>
+                <h4 style={{ fontSize: '16px', fontWeight: 700, color: textPrimary, marginBottom: '8px', minHeight: windowWidth < 640 ? 'auto' : '44px', display: 'flex', alignItems: 'center' }}>17-Point Regression Suite</h4>
+                <p style={{ fontSize: '13px', color: textMuted, lineHeight: 1.6, margin: 0, minHeight: windowWidth < 640 ? 'auto' : '66px' }}>Automated tests continuously auditing path traversal sanitization, device identity binding, and SHA-256 byte integrity.</p>
               </TiltCard>
             </div>
           </div>
@@ -1212,21 +1213,21 @@ export const App: React.FC = () => {
            PRODUCTION RELEASES (With Dynamic Proximity BorderGlow, Perfectly Aligned)
       ══════════════════════════════════════════════════════════════════════════ */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
-        <section id="downloads" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
-          <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
-            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 56px auto' }}>
+        <section id="downloads" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
+          <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
+            <div style={{ textAlign: 'center', maxWidth: '720px', margin: windowWidth < 640 ? '0 auto 36px auto' : '0 auto 56px auto' }}>
               <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.1em', color: textMuted, marginBottom: '14px' }}>
                 Production Releases
               </div>
-              <h2 style={{ fontSize: 'clamp(32px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
+              <h2 style={{ fontSize: 'clamp(28px, 4.2vw, 48px)', fontWeight: 800, letterSpacing: '-0.03em', color: textPrimary, marginBottom: '16px', lineHeight: 1.15 }}>
                 Download AuraDrop v2.0.1
               </h2>
-              <p style={{ fontSize: '17px', color: textMuted, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 'clamp(15px, 1.6vw, 17px)', color: textMuted, lineHeight: 1.6 }}>
                 Official release binaries. Code signed for Windows, standalone APK for Android, and verified SHA-256 integrity checksums.
               </p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '28px' }}>
+            <div className="releases-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: windowWidth < 640 ? '18px' : '28px' }}>
               {/* Windows Desktop Card with Dynamic Proximity BorderGlow */}
               <BorderGlow
                 borderRadius={22}
@@ -1238,10 +1239,11 @@ export const App: React.FC = () => {
                 glowIntensity={1.0}
               >
                 <div
+                  className="release-card-inner"
                   style={{
-                    padding: '36px 32px',
+                    padding: windowWidth < 640 ? '22px 18px' : '36px 32px',
                     height: '100%',
-                    minHeight: '490px',
+                    minHeight: windowWidth < 640 ? 'auto' : '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1249,7 +1251,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
+                    <div className="release-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: windowWidth < 640 ? 'auto' : '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: textPrimary }}>
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
@@ -1264,12 +1266,12 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
+                    <p className="release-card-desc" style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: windowWidth < 640 ? 'auto' : '72px', marginBottom: '20px' }}>
                       Tauri v2 native desktop application featuring native Windows Dynamic Island, local TCP chunk streaming, and zero-config peer discovery.
                     </p>
 
                     {/* Technical Specs Strip */}
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', minHeight: windowWidth < 640 ? 'auto' : '30px', marginBottom: '24px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>x64 Arch</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Rust Engine</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>SHA-256 Verified</span>
@@ -1302,7 +1304,7 @@ export const App: React.FC = () => {
                       </span>
                       <span style={{ opacity: 0.85, fontSize: '13px' }}>5.96 MB</span>
                     </a>
-                    <div style={{ display: 'flex', gap: '10px' }}>
+                    <div className="release-card-buttons" style={{ display: 'flex', gap: '10px', flexDirection: windowWidth < 480 ? 'column' : 'row' }}>
                       <a
                         href="/downloads/AuraDrop-Windows.msi"
                         download="AuraDrop-Windows.msi"
@@ -1363,10 +1365,11 @@ export const App: React.FC = () => {
                 glowIntensity={1.0}
               >
                 <div
+                  className="release-card-inner"
                   style={{
-                    padding: '36px 32px',
+                    padding: windowWidth < 640 ? '22px 18px' : '36px 32px',
                     height: '100%',
-                    minHeight: '490px',
+                    minHeight: windowWidth < 640 ? 'auto' : '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1374,7 +1377,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
+                    <div className="release-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: windowWidth < 640 ? 'auto' : '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#16a34a' }}>
                           <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M17.523 15.3414c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.551 0 .9993.4482.9993.9993.0001.5511-.4483.9997-.9993.9997m-11.046 0c-.5511 0-.9993-.4486-.9993-.9997s.4482-.9993.9993-.9993c.5511 0 .9993.4482.9993.9993 0 .5511-.4482.9997-.9993.9997m11.4045-6.02l1.9973-3.4592a.416.416 0 00-.1521-.5676.416.416 0 00-.5676.1521l-2.0223 3.503C15.5902 8.4116 13.8533 8.1 12 8.1s-3.5902.3116-5.1368.8497L4.8409 5.4467a.4161.4161 0 00-.5677-.1521.4157.4157 0 00-.1521.5676l1.9973 3.4592C2.6889 11.1867.3432 14.6589 0 18.761h24c-.3432-4.1021-2.6889-7.5743-6.1185-9.4396"/></svg>
@@ -1389,11 +1392,11 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
+                    <p className="release-card-desc" style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: windowWidth < 640 ? 'auto' : '72px', marginBottom: '20px' }}>
                       Flutter &amp; Kotlin foreground service app with real-time notification dynamic island, MediaStore gallery exports, and embedded socket server.
                     </p>
 
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', minHeight: windowWidth < 640 ? 'auto' : '30px', marginBottom: '24px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>ARM64-v8a</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Scoped Storage</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Zero Battery Drain</span>
@@ -1464,10 +1467,11 @@ export const App: React.FC = () => {
                 glowIntensity={1.0}
               >
                 <div
+                  className="release-card-inner"
                   style={{
-                    padding: '36px 32px',
+                    padding: windowWidth < 640 ? '22px 18px' : '36px 32px',
                     height: '100%',
-                    minHeight: '490px',
+                    minHeight: windowWidth < 640 ? 'auto' : '490px',
                     display: 'flex',
                     flexDirection: 'column',
                     justifyContent: 'space-between',
@@ -1475,7 +1479,7 @@ export const App: React.FC = () => {
                   }}
                 >
                   <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: '62px', marginBottom: '18px' }}>
+                    <div className="release-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', minHeight: windowWidth < 640 ? 'auto' : '62px', marginBottom: '18px' }}>
                       <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                         <div style={{ width: '48px', height: '48px', borderRadius: '12px', background: isDark ? 'rgba(255,255,255,0.06)' : '#f8fafc', border: `1px solid ${borderSubtle}`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: textPrimary }}>
                           <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.37c.61-.75 1.04-1.8 1.01-2.87-.96.04-2.06.66-2.7 1.45-.56.66-.99 1.72-.94 2.76 1.08.08 2.02-.59 2.63-1.34z"/></svg>
@@ -1490,11 +1494,11 @@ export const App: React.FC = () => {
                       </span>
                     </div>
 
-                    <p style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: '72px', marginBottom: '20px' }}>
+                    <p className="release-card-desc" style={{ fontSize: '14px', color: textMuted, lineHeight: 1.65, minHeight: windowWidth < 640 ? 'auto' : '72px', marginBottom: '20px' }}>
                       Native macOS Apple Silicon DMG and Linux AppImage packages are actively compiling. Safari and Chrome users can share instantly using WebRTC data planes.
                     </p>
 
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', minHeight: '30px', marginBottom: '28px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', minHeight: windowWidth < 640 ? 'auto' : '30px', marginBottom: '24px' }}>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>Apple Silicon</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>AppImage</span>
                       <span style={{ fontSize: '11px', fontWeight: 600, color: textMuted, background: isDark ? 'rgba(255,255,255,0.06)' : '#f1f5f9', padding: '4px 10px', borderRadius: '6px' }}>MIT License</span>
@@ -1562,16 +1566,16 @@ export const App: React.FC = () => {
            BUY ME A COFFEE / SUPPORT (Dynamic Proximity BorderGlow, Clean Direct UI)
       ══════════════════════════════════════════════════════════════════════════ */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
-        <section id="support" style={{ padding: '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
-          <div style={{ maxWidth: '860px', margin: '0 auto', padding: '0 28px', textAlign: 'center' }}>
-            <div style={{ textAlign: 'center', maxWidth: '720px', margin: '0 auto 46px auto' }}>
+        <section id="support" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
+          <div className="section-container" style={{ maxWidth: '860px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px', textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', maxWidth: '720px', margin: windowWidth < 640 ? '0 auto 32px auto' : '0 auto 46px auto' }}>
               <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.12em', color: textMuted, marginBottom: '14px' }}>
                 Support Independent Development
               </div>
-              <h2 style={{ fontSize: 'clamp(30px, 3.8vw, 46px)', fontWeight: 800, color: textPrimary, letterSpacing: '-0.03em', marginBottom: '16px' }}>
+              <h2 style={{ fontSize: 'clamp(28px, 3.8vw, 46px)', fontWeight: 800, color: textPrimary, letterSpacing: '-0.03em', marginBottom: '16px' }}>
                 Support AuraDrop Development
               </h2>
-              <p style={{ fontSize: '16px', color: textMuted, lineHeight: 1.6 }}>
+              <p style={{ fontSize: 'clamp(14px, 1.5vw, 16px)', color: textMuted, lineHeight: 1.6 }}>
                 AuraDrop is 100% free, private, and open source with zero advertisements, zero tracking, and zero cloud surveillance. If this tool saves you time, consider supporting future development directly.
               </p>
             </div>
@@ -1588,7 +1592,7 @@ export const App: React.FC = () => {
             >
               <div
                 style={{
-                  padding: '40px 32px',
+                  padding: windowWidth < 640 ? '24px 16px' : '40px 32px',
                   display: 'flex',
                   flexDirection: 'column',
                   alignItems: 'center',
@@ -1598,19 +1602,19 @@ export const App: React.FC = () => {
                 {/* Real Verified QR Code Container */}
                 <div
                   style={{
-                    padding: '20px',
+                    padding: windowWidth < 480 ? '14px' : '20px',
                     borderRadius: '18px',
                     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : '#f8fafc',
                     border: `1px solid ${borderSubtle}`,
                     textAlign: 'center',
-                    marginBottom: '26px',
+                    marginBottom: '24px',
                   }}
                 >
                   <img
                     src="/upi_qr.png"
                     alt="Union Bank Of India / PhonePe QR - B.JASWANTH REDDY"
-                    width="180"
-                    height="180"
+                    width={windowWidth < 480 ? 150 : 180}
+                    height={windowWidth < 480 ? 150 : 180}
                     style={{ borderRadius: '12px', objectFit: 'contain', display: 'block', margin: '0 auto' }}
                   />
                   <div style={{ marginTop: '12px' }}>
@@ -1625,10 +1629,12 @@ export const App: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
+                    flexWrap: windowWidth < 420 ? 'wrap' : 'nowrap',
+                    gap: '12px',
                     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : '#f8fafc',
                     border: `1px solid ${borderSubtle}`,
                     borderRadius: '14px',
-                    padding: '12px 20px',
+                    padding: windowWidth < 480 ? '10px 14px' : '12px 20px',
                     width: '100%',
                     maxWidth: '440px',
                     margin: '0 auto 24px auto',
@@ -1638,7 +1644,7 @@ export const App: React.FC = () => {
                     <span style={{ fontSize: '10px', textTransform: 'uppercase', fontWeight: 700, color: textMuted, letterSpacing: '0.08em', display: 'block' }}>
                       Direct UPI ID
                     </span>
-                    <span style={{ fontSize: '15px', fontWeight: 800, color: textPrimary, fontFamily: 'monospace' }}>
+                    <span style={{ fontSize: windowWidth < 400 ? '13px' : '15px', fontWeight: 800, color: textPrimary, fontFamily: 'monospace', wordBreak: 'break-all' }}>
                       9182769225@ybl
                     </span>
                   </div>
@@ -1654,6 +1660,7 @@ export const App: React.FC = () => {
                       fontSize: '12px',
                       fontWeight: 700,
                       transition: 'all 0.2s ease',
+                      flexShrink: 0,
                     }}
                   >
                     {copiedUpi ? 'Copied ✓' : 'Copy UPI'}
@@ -1661,7 +1668,7 @@ export const App: React.FC = () => {
                 </div>
 
                 {/* SlideCommit Component for interactive commitment */}
-                <div style={{ marginTop: '4px', marginBottom: '22px' }}>
+                <div className="slide-commit" style={{ marginTop: '4px', marginBottom: '22px', maxWidth: '100%', display: 'flex', justifyContent: 'center' }}>
                   <SlideCommit
                     label={`Slide to support · ₹${selectedTier}`}
                     doneLabel="Support confirmed! Thank you"
@@ -1671,7 +1678,7 @@ export const App: React.FC = () => {
                     handleColor="#ffffff"
                     successColor="#16a34a"
                     dangerColor="#e5484d"
-                    width={340}
+                    width={Math.min(340, Math.max(260, windowWidth - 64))}
                     height={52}
                     radius={26}
                     speed={50}
@@ -1685,17 +1692,19 @@ export const App: React.FC = () => {
                 )}
 
                 {/* Clean Support Tiers */}
-                <div style={{ display: 'flex', justifyContent: 'center', gap: '14px', flexWrap: 'wrap', width: '100%' }}>
+                <div style={{ display: 'flex', justifyContent: 'center', gap: windowWidth < 480 ? '8px' : '14px', flexWrap: 'wrap', width: '100%' }}>
                   <div
                     onClick={() => { setSelectedTier(50); setSupportNotice('Selected: 1 Coffee (₹50 / $1)'); }}
                     className="cursor-pointer"
                     style={{
-                      padding: '14px 20px',
+                      padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
                       borderRadius: '16px',
                       background: selectedTier === 50 ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
                       border: selectedTier === 50 ? (isDark ? '2px solid #ffffff' : '2px solid #0f172a') : `1px solid ${borderSubtle}`,
-                      minWidth: '130px',
+                      minWidth: windowWidth < 480 ? '90px' : '130px',
+                      flex: windowWidth < 480 ? '1 1 90px' : '0 1 auto',
                       transition: 'all 0.2s ease',
+                      textAlign: 'center',
                     }}
                   >
                     <div style={{ marginBottom: '6px', color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textMuted }}>
@@ -1715,12 +1724,14 @@ export const App: React.FC = () => {
                     onClick={() => { setSelectedTier(150); setSupportNotice('Selected: 3 Coffees (₹150 / $2)'); }}
                     className="cursor-pointer"
                     style={{
-                      padding: '14px 20px',
+                      padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
                       borderRadius: '16px',
                       background: selectedTier === 150 ? (isDark ? '#ffffff' : '#0f172a') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
                       border: selectedTier === 150 ? (isDark ? '2px solid #ffffff' : '2px solid #0f172a') : `1px solid ${borderSubtle}`,
-                      minWidth: '130px',
+                      minWidth: windowWidth < 480 ? '90px' : '130px',
+                      flex: windowWidth < 480 ? '1 1 90px' : '0 1 auto',
                       transition: 'all 0.2s ease',
+                      textAlign: 'center',
                     }}
                   >
                     <div style={{ marginBottom: '6px', color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textMuted, display: 'flex', justifyContent: 'center', gap: '3px' }}>
@@ -1742,12 +1753,14 @@ export const App: React.FC = () => {
                     onClick={() => { setSelectedTier(500); setSupportNotice('Selected: Supporter Star (₹500 / $6)'); }}
                     className="cursor-pointer"
                     style={{
-                      padding: '14px 20px',
+                      padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
                       borderRadius: '16px',
                       background: selectedTier === 500 ? (isDark ? 'rgba(245, 158, 11, 0.2)' : '#fffbeb') : (isDark ? 'rgba(255,255,255,0.04)' : '#f8fafc'),
                       border: selectedTier === 500 ? '2px solid #f59e0b' : `1px solid ${borderSubtle}`,
-                      minWidth: '130px',
+                      minWidth: windowWidth < 480 ? '90px' : '130px',
+                      flex: windowWidth < 480 ? '1 1 90px' : '0 1 auto',
                       transition: 'all 0.2s ease',
+                      textAlign: 'center',
                     }}
                   >
                     <div style={{ marginBottom: '6px', color: selectedTier === 500 ? '#f59e0b' : '#eab308' }}>
@@ -1768,9 +1781,9 @@ export const App: React.FC = () => {
       {/* ══════════════════════════════════════════════════════════════════════════
            FOOTER
       ══════════════════════════════════════════════════════════════════════════ */}
-      <footer style={{ borderTop: `1px solid ${borderSubtle}`, padding: '64px 0 36px', backgroundColor: pageBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
-        <div style={{ maxWidth: '1220px', margin: '0 auto', padding: '0 28px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '36px' }}>
+      <footer style={{ borderTop: `1px solid ${borderSubtle}`, padding: windowWidth < 640 ? '44px 0 28px' : '64px 0 36px', backgroundColor: pageBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
+        <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: windowWidth < 640 ? '28px' : '36px' }}>
             <div style={{ maxWidth: '340px', textAlign: 'left' }}>
               <a href="/" className="cursor-pointer" style={{ display: 'flex', alignItems: 'center', gap: '10px', textDecoration: 'none', color: textPrimary }}>
                 <div
@@ -1793,7 +1806,7 @@ export const App: React.FC = () => {
               </p>
             </div>
 
-            <div style={{ display: 'flex', gap: '44px', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: windowWidth < 640 ? '24px 32px' : '44px', flexWrap: 'wrap' }}>
               <div>
                 <div style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: textPrimary, marginBottom: '14px' }}>Navigation</div>
                 <ul style={{ display: 'flex', flexDirection: 'column', gap: '10px', listStyle: 'none', padding: 0 }}>
@@ -1869,7 +1882,7 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          <div style={{ marginTop: '50px', paddingTop: '24px', borderTop: `1px solid ${borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', fontSize: '12px', color: textMuted }}>
+          <div style={{ marginTop: '40px', paddingTop: '24px', borderTop: `1px solid ${borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: windowWidth < 640 ? 'flex-start' : 'center', flexDirection: windowWidth < 640 ? 'column' : 'row', gap: '14px', fontSize: '12px', color: textMuted }}>
             <span>© 2026 AuraDrop. Open source under the MIT License. Developed by B. Jaswanth Reddy · DPDP Act 2023 Compliant.</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
               <button
@@ -1899,6 +1912,7 @@ export const App: React.FC = () => {
         isOpen={isLegalOpen}
         onClose={() => setIsLegalOpen(false)}
         initialTab={legalTab}
+        isDark={isDark}
       />
       <CookieConsentBanner
         isDark={isDark}
