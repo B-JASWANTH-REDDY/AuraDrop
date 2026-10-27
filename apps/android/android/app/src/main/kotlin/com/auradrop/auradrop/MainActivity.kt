@@ -686,7 +686,10 @@ class MainActivity : FlutterActivity() {
     private val recentlyApprovedSenders = ConcurrentHashMap<String, Long>()
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val coroutineExceptionHandler = CoroutineExceptionHandler { _, throwable ->
+        Log.e(TAG, "Uncaught coroutine exception: ${throwable.message}", throwable)
+    }
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob() + coroutineExceptionHandler)
 
     // Database
     private lateinit var dbHelper: AuraDropDatabaseHelper
@@ -863,7 +866,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL).setMethodCallHandler { call, result ->
-            when (call.method) {
+            try {
+                when (call.method) {
                 "getDeviceInfo" -> {
                     result.success(mapOf(
                         "deviceId" to deviceId,
@@ -903,7 +907,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "sendFiles" -> {
                     val targetIp = call.argument<String>("targetIp") ?: ""
-                    val targetPort = call.argument<Int>("targetPort") ?: DEFAULT_PORT
+                    val targetPort = (call.argument<Number>("targetPort"))?.toInt() ?: DEFAULT_PORT
                     val filesList = call.argument<List<Map<String, Any>>>("files") ?: emptyList()
                     startSendFilesTask(targetIp, targetPort, filesList)
                     result.success(true)
@@ -1163,7 +1167,7 @@ class MainActivity : FlutterActivity() {
                     val transferId = call.argument<String>("transferId") ?: UUID.randomUUID().toString()
                     val senderName = call.argument<String>("senderName") ?: "Nearby Peer"
                     val senderDeviceName = call.argument<String>("senderDeviceName") ?: senderName
-                    val totalFiles = call.argument<Int>("totalFiles") ?: 1
+                    val totalFiles = (call.argument<Number>("totalFiles"))?.toInt() ?: 1
                     val totalBytes = (call.argument<Number>("totalBytes"))?.toLong() ?: 0L
                     val fileName = call.argument<String>("fileName") ?: "Incoming File"
 
@@ -1189,6 +1193,12 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 else -> result.notImplemented()
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Unhandled exception in MethodChannel '${call.method}': ${t.message}", t)
+                try {
+                    result.error("INTERNAL_ERROR", t.message ?: "Unknown error", null)
+                } catch (_: Exception) {}
             }
         }
 
@@ -3006,6 +3016,7 @@ class MainActivity : FlutterActivity() {
         filesList: List<Map<String, Any>>,
         transferId: String
     ): Boolean {
+        if (targetIp.isBlank() || filesList.isEmpty()) return false
         val effectivePort = if (targetPort > 0) targetPort else DEFAULT_PORT
         val prof = dbHelper.getProfile()
         val savedName = prof["display_name"]
@@ -3310,6 +3321,17 @@ class MainActivity : FlutterActivity() {
         val transferId = "send_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10)
 
         scope.launch(Dispatchers.IO) {
+            if (targetIp.isBlank()) {
+                Log.e(TAG, "Cannot start send: targetIp is blank")
+                sendEvent("transferError", mapOf("transferId" to transferId, "error" to "Target IP address is missing."))
+                return@launch
+            }
+            if (filesList.isEmpty()) {
+                Log.e(TAG, "Cannot start send: filesList is empty")
+                sendEvent("transferError", mapOf("transferId" to transferId, "error" to "No files selected."))
+                return@launch
+            }
+
             // High-speed HTTP direct upload trial (100MB/s compatible with Desktop axum engine)
             var httpSuccess = false
             try {

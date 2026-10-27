@@ -402,3 +402,12 @@ pub async fn confirm_transfer_verification(
     Ok(result)
 }
 
+#[tauri::command]
+pub async fn show_main_window(window: tauri::Window) -> Result<(), String> {
+    let _ = window.unminimize();
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(())
+}
+
+

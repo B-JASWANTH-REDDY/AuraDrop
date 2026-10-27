@@ -523,7 +523,14 @@ impl TransferService {
 
     async fn emit_progress(&self, payload: TransferProgressPayload) {
         if let Some(ref handle) = self.app_handle {
-            let _ = handle.emit("transfer-progress", payload);
+            let _ = handle.emit("transfer-progress", &payload);
+            if payload.status == "awaiting_verification" || (payload.is_incoming && payload.status == "transferring" && payload.bytes_transferred == 0) {
+                if let Some(window) = handle.get_webview_window("main") {
+                    let _ = window.unminimize();
+                    let _ = window.show();
+                    let _ = window.request_user_attention(Some(tauri::UserAttentionType::Critical));
+                }
+            }
         }
     }
 
@@ -1328,6 +1335,9 @@ async fn handle_chat(
 
     if let Some(ref handle) = service.app_handle {
         let _ = handle.emit("chat-message-received", &msg);
+        if let Some(window) = handle.get_webview_window("main") {
+            let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+        }
     }
 
     crate::log_debug(&format!("[AuraChat] Message received from {}: {}", msg.peer_name, msg.text));

@@ -10,7 +10,7 @@ use commands::{
     cancel_transfer, check_for_updates, confirm_transfer_verification, get_all_chat_conversations,
     get_chat_history, get_local_info, get_nearby_peers, open_downloads_folder, open_file,
     open_url, pick_files, probe_device_ip, rescan_network, send_chat_message, send_files_to_peer,
-    set_device_name, show_file_in_folder, AppState,
+    set_device_name, show_file_in_folder, show_main_window, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -82,7 +82,8 @@ pub fn run() {
             check_for_updates,
             show_file_in_folder,
             open_file,
-            open_url
+            open_url,
+            show_main_window
         ])
         .run(tauri::generate_context!());
 

@@ -17,7 +17,8 @@ type IslandPhase =
   | 'waiting_approval'
   | 'transferring'
   | 'completed'
-  | 'failed';
+  | 'failed'
+  | 'message';
 
 interface IslandState {
   phase: IslandPhase;
@@ -34,6 +35,9 @@ interface IslandState {
   transferId: string;
   isIncoming: boolean;
   sasCode: string;
+  chatSender: string;
+  chatText: string;
+  chatPeerId: string;
 }
 
 type IslandAction =
@@ -44,6 +48,7 @@ type IslandAction =
   | { type: 'TRANSFER_COMPLETE'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_FAILED'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_CANCELLED' }
+  | { type: 'CHAT_MESSAGE'; senderName: string; text: string; peerId: string }
   | { type: 'EXPAND' }
   | { type: 'COLLAPSE' }
   | { type: 'DISMISS' };
@@ -63,6 +68,9 @@ const initialState: IslandState = {
   transferId: '',
   isIncoming: false,
   sasCode: '',
+  chatSender: '',
+  chatText: '',
+  chatPeerId: '',
 };
 
 function islandReducer(state: IslandState, action: IslandAction): IslandState {
@@ -173,6 +181,17 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
       };
     }
 
+    case 'CHAT_MESSAGE': {
+      return {
+        ...state,
+        phase: 'message',
+        expanded: true,
+        chatSender: action.senderName,
+        chatText: action.text,
+        chatPeerId: action.peerId,
+      };
+    }
+
     case 'EXPAND':
       return { ...state, expanded: true };
 
@@ -182,7 +201,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
     case 'DISMISS':
       return {
         ...state,
-        phase: state.phase === 'completed' || state.phase === 'failed' ? 'idle' : state.phase,
+        phase: state.phase === 'completed' || state.phase === 'failed' || state.phase === 'message' ? 'idle' : state.phase,
         expanded: false,
         errorMessage: '',
       };
@@ -228,7 +247,10 @@ if (typeof document !== 'undefined' && !document.getElementById('__ai_island_sty
 }
 
 // ── DesktopIsland Component ───────────────────────────────────────────────────
-export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain }) => {
+export const DesktopIsland: React.FC<{
+  onOpenMain: () => void;
+  onOpenChat?: (peerId: string) => void;
+}> = ({ onOpenMain, onOpenChat }) => {
   const [state, dispatch] = useReducer(islandReducer, initialState);
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
@@ -240,6 +262,7 @@ export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain
   useEffect(() => {
     if (state.phase === 'completed') scheduleCollapse(7000);
     if (state.phase === 'failed') scheduleCollapse(9000);
+    if (state.phase === 'message') scheduleCollapse(6000);
   }, [state.phase, scheduleCollapse]);
 
   useEffect(() => {
@@ -323,6 +346,21 @@ export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain
       })
     );
 
+    // 5. Real-time chat message listener
+    ul.push(
+      listen<any>('chat-message-received', (e) => {
+        const p = e.payload;
+        if (p && !p.isOutgoing) {
+          dispatch({
+            type: 'CHAT_MESSAGE',
+            senderName: p.senderName || p.peerName || 'Nearby Peer',
+            text: p.text || '',
+            peerId: p.peerId || p.senderId || '',
+          });
+        }
+      })
+    );
+
     return () => {
       ul.forEach((p) => p.then((f) => f()));
       if (timer.current) clearTimeout(timer.current);
@@ -387,6 +425,8 @@ export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain
         return '✓ Transfer Complete';
       case 'failed':
         return '✕ Transfer Failed';
+      case 'message':
+        return `💬 ${state.chatSender}: ${state.chatText.slice(0, 18)}${state.chatText.length > 18 ? '…' : ''}`;
       default:
         return 'AuraDrop';
     }
@@ -395,6 +435,7 @@ export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain
   const accentColor = () => {
     switch (state.phase) {
       case 'waiting_approval':
+      case 'message':
         return '#38BDF8';
       case 'transferring':
         return '#60A5FA';
@@ -753,6 +794,74 @@ export const DesktopIsland: React.FC<{ onOpenMain: () => void }> = ({ onOpenMain
           {state.phase === 'failed' && (
             <div style={{ fontSize: 12, color: '#F87171', fontWeight: 500 }}>
               {state.errorMessage || 'Transfer was interrupted or failed'}
+            </div>
+          )}
+
+          {/* Phase: Chat Message Alert */}
+          {state.phase === 'message' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span style={{ fontSize: 13, color: '#38BDF8', fontWeight: 700 }}>💬 {state.chatSender}</span>
+                <span style={{ fontSize: 11, color: '#9CA3AF' }}>just now</span>
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: '#F3F4F6',
+                  background: 'rgba(255, 255, 255, 0.06)',
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  wordBreak: 'break-word',
+                  lineHeight: 1.4,
+                }}
+              >
+                {state.chatText}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onOpenChat && state.chatPeerId) {
+                      onOpenChat(state.chatPeerId);
+                    } else {
+                      onOpenMain();
+                    }
+                    dispatch({ type: 'DISMISS' });
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '7px 12px',
+                    borderRadius: 8,
+                    background: '#38BDF8',
+                    border: 'none',
+                    color: '#000',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Reply in Chat
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    dispatch({ type: 'DISMISS' });
+                  }}
+                  style={{
+                    padding: '7px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    color: '#9CA3AF',
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           )}
 

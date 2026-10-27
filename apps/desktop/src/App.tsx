@@ -443,10 +443,12 @@ export const App: React.FC = () => {
       {/* ── Desktop Dynamic Island ─────────────────────────────────── */}
       <DesktopIsland
         onOpenMain={() => {
-          // Bring the main window forward; modals already handle their own show state
-          invoke('show_main_window').catch(() => {
-            // show_main_window is optional — focus management handled by OS if not implemented
-          });
+          invoke('show_main_window').catch(() => {});
+        }}
+        onOpenChat={(peerId) => {
+          invoke('show_main_window').catch(() => {});
+          const p = peers.find((peer) => peer.id === peerId);
+          if (p) setChatPeer(p);
         }}
       />
     </div>

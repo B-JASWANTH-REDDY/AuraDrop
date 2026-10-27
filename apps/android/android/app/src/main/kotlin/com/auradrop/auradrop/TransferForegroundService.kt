@@ -43,6 +43,8 @@ class TransferForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        val defaultNotif = buildOngoingNotification("AuraDrop Transfer", 0, "Connecting data stream...")
+        safeStartForeground(NOTIFICATION_ID, defaultNotif)
     }
 
     private fun safeStartForeground(id: Int, notification: Notification) {
@@ -67,7 +69,12 @@ class TransferForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
+        if (intent == null) {
+            val defaultNotif = buildOngoingNotification("AuraDrop Transfer", 0, "Transfer active")
+            safeStartForeground(NOTIFICATION_ID, defaultNotif)
+            return START_NOT_STICKY
+        }
+        when (intent.action) {
             ACTION_START -> {
                 val title = intent.getStringExtra(EXTRA_TITLE) ?: "Transferring files..."
                 val progress = intent.getIntExtra(EXTRA_PROGRESS, 0)
@@ -97,8 +104,14 @@ class TransferForegroundService : Service() {
                 stopSelf()
             }
             ACTION_STOP -> {
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {}
                 stopSelf()
+            }
+            else -> {
+                val defaultNotif = buildOngoingNotification("AuraDrop Transfer", 0, "Transfer active")
+                safeStartForeground(NOTIFICATION_ID, defaultNotif)
             }
         }
         return START_NOT_STICKY

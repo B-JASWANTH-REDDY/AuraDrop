@@ -64,6 +64,7 @@ class AuraBackgroundService : Service() {
         createNotificationChannel()
         acquireLocks()
         isRunning = true
+        safeStartForeground(NOTIFICATION_ID, buildOngoingNotification())
         Log.d(TAG, "AuraBackgroundService created - 24/7 discovery active")
     }
 
