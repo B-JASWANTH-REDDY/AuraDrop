@@ -1319,6 +1319,16 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         children: [
           Row(
             children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.asset(
+                  'assets/logo.png',
+                  width: 28,
+                  height: 28,
+                  fit: BoxFit.contain,
+                ),
+              ),
+              const SizedBox(width: 10),
               Text(
                 'AuraDrop',
                 style: TextStyle(

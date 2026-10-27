@@ -12,7 +12,6 @@ import { ChatModal } from './components/ChatModal';
 import { ChatHubModal } from './components/ChatHubModal';
 import { UpdateModal } from './components/UpdateModal';
 import { SettingsAndAboutModal, TabKey } from './components/SettingsAndAboutModal';
-import { DesktopIsland } from './components/DesktopIsland';
 import logoImg from './assets/logo.png';
 import {
   Send,
@@ -121,6 +120,26 @@ export const App: React.FC = () => {
       unlistenPeers.then((fn) => fn());
       unlistenTransfer.then((fn) => fn());
       unlistenOpenChat.then((fn) => fn());
+    };
+  }, []);
+
+  // Manage Floating Island Window: Hide when main window is in-focus, show when outside (blurred)
+  useEffect(() => {
+    const handleFocus = () => {
+      invoke('hide_island_window').catch(() => {});
+    };
+    const handleBlur = () => {
+      invoke('show_island_window').catch(() => {});
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    // Main window is focused on startup, so suppress overlapping floating island
+    handleFocus();
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
     };
   }, []);
 
@@ -466,18 +485,6 @@ export const App: React.FC = () => {
           onClearHistory={() => setHistory([])}
         />
       )}
-
-      {/* ── Desktop Dynamic Island ─────────────────────────────────── */}
-      <DesktopIsland
-        onOpenMain={() => {
-          invoke('show_main_window').catch(() => {});
-        }}
-        onOpenChat={(peerId) => {
-          invoke('show_main_window').catch(() => {});
-          const p = peers.find((peer) => peer.id === peerId);
-          if (p) setChatPeer(p);
-        }}
-      />
     </div>
   );
 };

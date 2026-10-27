@@ -46,6 +46,8 @@
                     android:layout_width="48dp"
                     android:layout_height="48dp"
                     android:layout_gravity="center"
+                    android:scaleType="fitCenter"
+                    android:adjustViewBounds="true"
                     android:src="@drawable/ic_auradrop_badge"
                     android:contentDescription="AuraDrop Icon" />
 

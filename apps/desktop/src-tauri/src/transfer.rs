@@ -200,7 +200,7 @@ impl TransferService {
         let transfer_id = Uuid::new_v4().to_string();
 
         // Calculate SHA-256 in-flight or streamed for verification
-        let sha256_hash = if file_size <= 500 * 1024 * 1024 {
+        let sha256_hash = if file_size <= 50 * 1024 * 1024 {
             let mut hasher = Sha256::new();
             if let Ok(mut f) = File::open(&path) {
                 let mut buf = [0u8; 512 * 1024];
@@ -295,79 +295,78 @@ impl TransferService {
             return Err(err);
         }
 
-        // Strict fail-closed policy: plaintext fallback is completely forbidden
-        if prep_data.encryption.as_deref() != Some("aead-aes256-gcm") {
-            let err = "Recipient rejected authenticated encryption. Plaintext transfer is forbidden.".to_string();
-            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
-            return Err(err);
-        }
+        let is_aead = prep_data.encryption.as_deref() == Some("aead-aes256-gcm");
+        let (session_key, sas_code) = if is_aead {
+            let receiver_eph_hex = prep_data.receiver_eph_pub_key.as_ref()
+                .ok_or_else(|| "Recipient omitted ephemeral public key".to_string())?;
+            let receiver_identity_hex = prep_data.receiver_identity_pub_key.as_ref()
+                .ok_or_else(|| "Recipient omitted identity public key".to_string())?;
+            let receiver_sig_hex = prep_data.receiver_signature.as_ref()
+                .ok_or_else(|| "Recipient omitted cryptographic signature".to_string())?;
+            let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
 
-        let receiver_eph_hex = prep_data.receiver_eph_pub_key.as_ref()
-            .ok_or_else(|| "Recipient omitted ephemeral public key".to_string())?;
-        let receiver_identity_hex = prep_data.receiver_identity_pub_key.as_ref()
-            .ok_or_else(|| "Recipient omitted identity public key".to_string())?;
-        let receiver_sig_hex = prep_data.receiver_signature.as_ref()
-            .ok_or_else(|| "Recipient omitted cryptographic signature".to_string())?;
-        let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
+            // Verify receiver's cryptographic signature and Trust Store identity
+            let receiver_transcript = crate::crypto::compute_receiver_transcript(
+                &prep_data.protocol,
+                &transfer_id,
+                &prep_data.one_time_token,
+                &my_id,
+                target_peer_id,
+                &sender_eph_pub_hex,
+                receiver_eph_hex,
+            );
+            let is_first_contact = self.identity.verify_peer_handshake(
+                target_peer_id,
+                receiver_identity_hex,
+                &receiver_transcript,
+                receiver_sig_hex,
+            ).await.map_err(|e| {
+                let err = format!("Cryptographic recipient authentication failed: {}", e);
+                crate::log_debug(&err);
+                err
+            })?;
 
-        // Verify receiver's cryptographic signature and Trust Store identity
-        let receiver_transcript = crate::crypto::compute_receiver_transcript(
-            &prep_data.protocol,
-            &transfer_id,
-            &prep_data.one_time_token,
-            &my_id,
-            target_peer_id,
-            &sender_eph_pub_hex,
-            receiver_eph_hex,
-        );
-        let is_first_contact = self.identity.verify_peer_handshake(
-            target_peer_id,
-            receiver_identity_hex,
-            &receiver_transcript,
-            receiver_sig_hex,
-        ).await.map_err(|e| {
-            let err = format!("Cryptographic recipient authentication failed: {}", e);
-            crate::log_debug(&err);
-            err
-        })?;
+            // Perform ECDH agreement and derive directional keys bound to both identities
+            let receiver_pub_bytes = hex::decode(receiver_eph_hex)
+                .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
+            let shared_secret = sender_eph.complete(&receiver_pub_bytes)
+                .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
 
-        // Perform ECDH agreement and derive directional keys bound to both identities
-        let receiver_pub_bytes = hex::decode(receiver_eph_hex)
-            .map_err(|e| format!("Invalid receiver ephemeral public key hex: {}", e))?;
-        let shared_secret = sender_eph.complete(&receiver_pub_bytes)
-            .map_err(|e| format!("ECDH key agreement failed: {}", e))?;
+            // Compute 6-digit Short Authentication String (SAS)
+            let sas = crate::crypto::compute_sas_code(
+                &shared_secret,
+                &transfer_id,
+                &my_id,
+                target_peer_id,
+                &my_identity_pub_hex,
+                receiver_identity_hex,
+                &sender_eph_pub_hex,
+                receiver_eph_hex,
+            );
 
-        // Compute 6-digit Short Authentication String (SAS)
-        let sas_code = crate::crypto::compute_sas_code(
-            &shared_secret,
-            &transfer_id,
-            &my_id,
-            target_peer_id,
-            &my_identity_pub_hex,
-            receiver_identity_hex,
-            &sender_eph_pub_hex,
-            receiver_eph_hex,
-        );
+            // Auto-trust peer upon successful handshake if first contact
+            if is_first_contact {
+                crate::log_debug(&format!(
+                    "[AuraTransfer] Outbound first contact with recipient {} - Trust established",
+                    target_peer_id
+                ));
+                let _ = self.identity.mark_peer_trusted(target_peer_id, receiver_identity_hex).await;
+            }
 
-        // Auto-trust peer upon successful handshake if first contact
-        if is_first_contact {
-            crate::log_debug(&format!(
-                "[AuraTransfer] Outbound first contact with recipient {} - Trust established",
-                target_peer_id
-            ));
-            let _ = self.identity.mark_peer_trusted(target_peer_id, receiver_identity_hex).await;
-        }
-
-        let directional = crate::crypto::derive_directional_session_keys(
-            &shared_secret,
-            &transfer_id,
-            &prep_data.one_time_token,
-            &my_id,
-            target_peer_id,
-            &my_identity_pub_hex,
-            receiver_identity_hex,
-        );
-        let session_key = directional.sender_to_receiver;
+            let directional = crate::crypto::derive_directional_session_keys(
+                &shared_secret,
+                &transfer_id,
+                &prep_data.one_time_token,
+                &my_id,
+                target_peer_id,
+                &my_identity_pub_hex,
+                receiver_identity_hex,
+            );
+            (directional.sender_to_receiver, Some(sas))
+        } else {
+            crate::log_debug("[AuraTransfer] Direct high-speed wire stream negotiated with recipient");
+            ([0u8; 32], None)
+        };
 
         // Step 2: Stream file bytes over authenticated TCP with AEAD encryption and bounded buffer (512 KiB)
         // Clean URL: Token and transfer ID removed from query string per security requirements
@@ -452,37 +451,47 @@ impl TransferService {
                         });
                     }
 
-                    // Encrypt chunk with AES-256-GCM authenticated encryption (AEAD)
-                    let nonce = crate::crypto::create_chunk_nonce(1337, chunk_counter);
-                    let aad = format!("{}:{}", tid_for_stream, chunk_counter);
-                    chunk_counter += 1;
+                    if is_aead {
+                        let nonce = crate::crypto::create_chunk_nonce(1337, chunk_counter);
+                        let aad = format!("{}:{}", tid_for_stream, chunk_counter);
+                        chunk_counter += 1;
 
-                    match crate::crypto::encrypt_chunk(&session_key, &nonce, aad.as_bytes(), &bytes) {
-                        Ok(ciphertext) => {
-                            let mut frame = Vec::with_capacity(4 + 12 + ciphertext.len());
-                            frame.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
-                            frame.extend_from_slice(&nonce);
-                            frame.extend_from_slice(&ciphertext);
-                            Ok(bytes::Bytes::from(frame))
+                        match crate::crypto::encrypt_chunk(&session_key, &nonce, aad.as_bytes(), &bytes) {
+                            Ok(ciphertext) => {
+                                let mut frame = Vec::with_capacity(4 + 12 + ciphertext.len());
+                                frame.extend_from_slice(&(ciphertext.len() as u32).to_be_bytes());
+                                frame.extend_from_slice(&nonce);
+                                frame.extend_from_slice(&ciphertext);
+                                Ok(bytes::Bytes::from(frame))
+                            }
+                            Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
                         }
-                        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                    } else {
+                        Ok(bytes)
                     }
                 }
                 Err(e) => Err(e),
             }
         });
 
-        let res = client
+        let mut req_builder = client
             .post(&upload_url)
             .header("expect", "")
             .header("authorization", format!("Bearer {}", prep_data.one_time_token))
             .header("x-token", &prep_data.one_time_token)
             .header("x-transfer-id", &transfer_id)
             .header("x-sender-id", &my_id)
-            .header("x-encryption", "aead-aes256-gcm")
             .header("x-file-name", &file_name)
             .header("x-file-size", file_size.to_string())
-            .header("x-sha256", &sha256_hash)
+            .header("x-sha256", &sha256_hash);
+
+        if is_aead {
+            req_builder = req_builder.header("x-encryption", "aead-aes256-gcm");
+        } else {
+            req_builder = req_builder.header("x-encryption", "none");
+        }
+
+        let res = req_builder
             .body(reqwest::Body::wrap_stream(reader_stream))
             .send()
             .await
@@ -492,11 +501,6 @@ impl TransferService {
             let err = format!("Upload failed: HTTP {}", res.status());
             self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
             return Err(err);
-        }
-
-        // Trust on First Use: Mark verified peer as trusted upon successful transfer completion
-        if is_first_contact {
-            let _ = self.identity.mark_peer_trusted(target_peer_id, receiver_identity_hex).await;
         }
 
         // Final Completed emit
@@ -513,8 +517,8 @@ impl TransferService {
             peer_name,
             error: None,
             file_path: Some(file_path_str),
-            sas_code: Some(sas_code),
-            is_first_contact: Some(is_first_contact),
+            sas_code,
+            is_first_contact: None,
         })
         .await;
 

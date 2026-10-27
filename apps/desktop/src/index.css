@@ -31,6 +31,9 @@
     background: transparent !important;
     background-color: transparent !important;
     overflow: hidden !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 }
 

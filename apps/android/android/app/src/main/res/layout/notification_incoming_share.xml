@@ -17,7 +17,8 @@
         <ImageView
             android:layout_width="44dp"
             android:layout_height="44dp"
-            android:src="@drawable/ic_airdrop_badge"
+            android:src="@drawable/ic_auradrop_badge"
+            android:scaleType="fitCenter"
             android:contentDescription="AuraDrop Icon" />
 
         <!-- Sender & File Detail Column -->

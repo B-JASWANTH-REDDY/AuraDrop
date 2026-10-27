@@ -450,4 +450,20 @@ pub async fn set_island_size(app: tauri::AppHandle, width: f64, height: f64) -> 
     Ok(())
 }
 
+#[tauri::command]
+pub async fn hide_island_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(island) = app.get_webview_window("island") {
+        let _ = island.hide();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn show_island_window(app: tauri::AppHandle) -> Result<(), String> {
+    if let Some(island) = app.get_webview_window("island") {
+        let _ = island.show();
+    }
+    Ok(())
+}
+
 

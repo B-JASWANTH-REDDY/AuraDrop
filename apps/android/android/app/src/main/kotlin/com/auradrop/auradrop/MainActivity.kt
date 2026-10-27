@@ -667,6 +667,7 @@ class MainActivity : FlutterActivity() {
     private var pendingFilePickResult: MethodChannel.Result? = null
     private var pendingAvatarPickResult: MethodChannel.Result? = null
     private var isAppInForeground = true
+    private val lastOverlayPromptTimes = ConcurrentHashMap<String, Long>()
 
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wakeLock: android.os.PowerManager.WakeLock? = null
@@ -1586,7 +1587,10 @@ class MainActivity : FlutterActivity() {
                         sendEvent("peerDiscovered", mapOf("peer" to peer.toMap()))
 
                         // If user is outside the app, immediately show floating AirDrop Dynamic Island overlay
-                        if (isNew && !isAppInForeground) {
+                        val nowMs = System.currentTimeMillis()
+                        val lastShown = lastOverlayPromptTimes[peer.deviceId] ?: 0L
+                        if (!isAppInForeground && (isNew || (nowMs - lastShown > 25000L))) {
+                            lastOverlayPromptTimes[peer.deviceId] = nowMs
                             mainHandler.post {
                                 showSystemNameDropProximityNotification(
                                     peerId = peer.deviceId,

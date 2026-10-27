@@ -49,6 +49,8 @@ class AuraBackgroundService : Service() {
         @Volatile
         var isRunning = false
             private set
+
+        private val lastBackgroundOverlayTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -192,7 +194,12 @@ class AuraBackgroundService : Service() {
 
                         // STRICT RULE: Overlay appears ONLY when user is OUTSIDE the AuraDrop app (Home Screen, Lock Screen, other apps)
                         val overlayMgr = AuraOverlayManager.getInstance(applicationContext)
-                        if (!overlayMgr.isAppInForeground && isNew) {
+                        val nowMs = System.currentTimeMillis()
+                        val lastShown = lastBackgroundOverlayTimes[peer.deviceId] ?: 0L
+                        val shouldShowOverlay = !overlayMgr.isAppInForeground && (isNew || (nowMs - lastShown > 25000L))
+
+                        if (shouldShowOverlay) {
+                            lastBackgroundOverlayTimes[peer.deviceId] = nowMs
                             Log.d(TAG, "Real nearby device detected outside app: ${peer.displayName} (${peer.ip}). Launching floating island!")
                             overlayMgr.showNameDropOverlay(
                                 peerId = peer.deviceId,

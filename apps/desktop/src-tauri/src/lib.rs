@@ -11,7 +11,7 @@ use commands::{
     get_chat_history, get_local_info, get_nearby_peers, open_chat_window, open_downloads_folder,
     open_file, open_url, pick_files, probe_device_ip, rescan_network, send_chat_message,
     send_files_to_peer, set_device_name, set_island_size, show_file_in_folder, show_main_window,
-    AppState,
+    hide_island_window, show_island_window, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -100,7 +100,9 @@ pub fn run() {
             open_url,
             show_main_window,
             open_chat_window,
-            set_island_size
+            set_island_size,
+            hide_island_window,
+            show_island_window
         ])
         .run(tauri::generate_context!());
 

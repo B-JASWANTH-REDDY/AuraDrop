@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useReducer, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type { PeerDevice, TransferProgressPayload } from '../types';
+import logoImg from '../assets/logo.png';
 
 type IslandPhase =
   | 'idle'
@@ -489,21 +490,20 @@ export const DesktopIsland: React.FC<{
       }}
       onClick={() => dispatch(state.expanded ? { type: 'COLLAPSE' } : { type: 'EXPAND' })}
       style={{
-        position: 'fixed',
-        top: 14,
-        left: '50%',
-        transform: 'translateX(-50%)',
+        position: isOverlayWindow ? 'relative' : 'fixed',
+        top: isOverlayWindow ? 0 : 14,
+        left: isOverlayWindow ? 'auto' : '50%',
+        transform: isOverlayWindow ? 'none' : 'translateX(-50%)',
         zIndex: 99999,
-        background: 'rgba(12, 12, 14, 0.96)',
+        background: '#000000',
         backdropFilter: 'blur(30px)',
+        WebkitBackdropFilter: 'blur(30px)',
         border:
           state.phase === 'waiting_approval'
-            ? '1.5px solid rgba(0, 122, 255, 0.7)'
-            : '1px solid rgba(255, 255, 255, 0.14)',
+            ? '1.5px solid rgba(0, 122, 255, 0.85)'
+            : '1px solid rgba(255, 255, 255, 0.18)',
         borderRadius: state.expanded ? 28 : 100,
-        boxShadow: state.expanded
-          ? '0 24px 64px rgba(0,0,0,0.9), 0 0 0 1px rgba(255,255,255,0.08)'
-          : '0 12px 40px rgba(0,0,0,0.75), 0 0 0 .5px rgba(255,255,255,0.06)',
+        boxShadow: 'none',
         cursor: 'pointer',
         userSelect: 'none',
         outline: 'none',
@@ -514,18 +514,18 @@ export const DesktopIsland: React.FC<{
         minWidth: state.expanded ? 400 : 110,
         maxWidth: 440,
         transition:
-          'border-radius .38s cubic-bezier(.34,1.56,.64,1), width .38s cubic-bezier(.34,1.56,.64,1), box-shadow .38s ease',
+          'border-radius .38s cubic-bezier(.34,1.56,.64,1), width .38s cubic-bezier(.34,1.56,.64,1)',
       }}
     >
       {/* ── Collapsed Dynamic Pill ── */}
       {!state.expanded && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '7px 14px' }}>
-          {/* Pulsing Aura Ring */}
-          <svg width={15} height={15} viewBox="0 0 24 24" fill="none" aria-hidden>
-            <circle cx="12" cy="12" r="3" fill={accentColor()} />
-            <circle cx="12" cy="12" r="6" stroke={accentColor()} strokeWidth="1.6" fill="none" opacity=".6" />
-            <circle cx="12" cy="12" r="10" stroke={accentColor()} strokeWidth="1.1" fill="none" opacity=".3" />
-          </svg>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 14px' }}>
+          {/* Official AuraDrop Logo */}
+          <img
+            src={logoImg}
+            alt="AuraDrop"
+            style={{ width: 17, height: 17, objectFit: 'contain', flexShrink: 0 }}
+          />
 
           <span style={{ fontSize: 12, fontWeight: 600, color: '#F3F4F6', whiteSpace: 'nowrap' }}>
             {pillLabel}
@@ -579,25 +579,25 @@ export const DesktopIsland: React.FC<{
         <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           {/* Top Row: Icon/Avatar + Details + Preview Thumbnail */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {/* Left: 44x44 AuraDrop Badge */}
+            {/* Left: 44x44 Official AuraDrop Logo Badge */}
             <div
               style={{
                 width: 44,
                 height: 44,
-                borderRadius: '50%',
-                background: 'linear-gradient(135deg, rgba(37,99,235,0.25), rgba(59,130,246,0.1))',
-                border: '1px solid rgba(59,130,246,0.3)',
+                borderRadius: 12,
+                background: '#18181B',
+                border: '1px solid rgba(255, 255, 255, 0.14)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
               }}
             >
-              <svg width={22} height={22} viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="12" r="3" fill="#38BDF8" />
-                <circle cx="12" cy="12" r="6" stroke="#38BDF8" strokeWidth="1.6" fill="none" opacity=".8" />
-                <circle cx="12" cy="12" r="10" stroke="#38BDF8" strokeWidth="1.2" fill="none" opacity=".4" />
-              </svg>
+              <img
+                src={logoImg}
+                alt="AuraDrop"
+                style={{ width: 28, height: 28, objectFit: 'contain' }}
+              />
             </div>
 
             {/* Middle: Title, Subtitle, Status */}
@@ -800,7 +800,7 @@ export const DesktopIsland: React.FC<{
               </>
             )}
 
-            {state.phase === 'discovering' && (
+            {(state.phase === 'discovering' || state.phase === 'idle') && (
               <>
                 <button
                   onClick={(e) => {
