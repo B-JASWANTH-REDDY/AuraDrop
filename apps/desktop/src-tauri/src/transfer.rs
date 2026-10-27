@@ -813,10 +813,19 @@ async fn handle_prepare_upload(
         is_first_contact: Some(is_first_contact),
     }).await;
 
-    // Await user's explicit Accept or Decline decision (60 seconds)
-    let user_accepted = match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
-        Ok(Ok(decision)) => decision,
-        _ => false,
+    // If peer is already verified and trusted in TrustStore (not first contact), auto-accept immediately!
+    let user_accepted = if !is_first_contact {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Inbound peer {} is verified in TrustStore - auto-accepting transfer",
+            payload.sender_user_id
+        ));
+        true
+    } else {
+        // Await user's explicit Accept or Decline decision (60 seconds)
+        match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
+            Ok(Ok(decision)) => decision,
+            _ => false,
+        }
     };
     service.pending_verifications.write().await.remove(&payload.transfer_id);
 

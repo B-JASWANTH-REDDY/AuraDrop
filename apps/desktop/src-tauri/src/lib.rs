@@ -70,6 +70,35 @@ pub fn run() {
                     let _ = island.show();
                 }
 
+                // Native window focus/blur/close handlers: Auto-hide island when main window has focus;
+                // keep island active 24/7 when main window loses focus or is closed/minimized!
+                if let Some(main) = app.get_webview_window("main") {
+                    let app_handle = handle.clone();
+                    main.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Focused(focused) => {
+                                if let Some(island) = app_handle.get_webview_window("island") {
+                                    if *focused {
+                                        let _ = island.hide();
+                                    } else {
+                                        let _ = island.show();
+                                    }
+                                }
+                            }
+                            tauri::WindowEvent::CloseRequested { api, .. } => {
+                                api.prevent_close();
+                                if let Some(main_win) = app_handle.get_webview_window("main") {
+                                    let _ = main_win.hide();
+                                }
+                                if let Some(island) = app_handle.get_webview_window("island") {
+                                    let _ = island.show();
+                                }
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+
                 app.manage(AppState {
                     identity,
                     discovery: d,

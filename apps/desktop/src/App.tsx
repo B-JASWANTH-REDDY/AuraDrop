@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { PeerDevice, LocalDeviceInfo, SelectedFileInfo, TransferProgressPayload } from './types';
 import { HeroGlobe } from './components/HeroGlobe';
 import { DeviceShelf } from './components/DeviceShelf';
@@ -125,6 +126,11 @@ export const App: React.FC = () => {
 
   // Manage Floating Island Window: Hide when main window is in-focus, show when outside (blurred)
   useEffect(() => {
+    try {
+      const win = getCurrentWebviewWindow();
+      if (win && win.label !== 'main') return;
+    } catch (_) {}
+
     const handleFocus = () => {
       invoke('hide_island_window').catch(() => {});
     };

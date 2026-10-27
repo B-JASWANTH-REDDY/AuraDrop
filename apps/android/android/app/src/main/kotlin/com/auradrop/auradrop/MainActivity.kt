@@ -2262,13 +2262,25 @@ class MainActivity : FlutterActivity() {
                     sendEvent("incomingShareRequest", shareEventMap)
                     sendEvent("transferRequest", shareEventMap)
 
-                    // Await user's explicit Accept or Decline decision (up to 60 seconds)
-                    val accepted = withTimeoutOrNull(60000L) {
-                        decisionDeferred.await()
-                    } ?: false
+                    // Auto-approve if peer is already verified and trusted in TrustStore, or recently approved in this session
+                    val recentlyApprovedTime = recentlyApprovedSenders[senderUserId] ?: 0L
+                    val isRecentlyApproved = (System.currentTimeMillis() - recentlyApprovedTime) < 15 * 60 * 1000L
+                    val isPeerTrusted = AuraIdentityManager.isPeerTrusted(applicationContext, senderUserId)
+
+                    val accepted = if (isRecentlyApproved || isPeerTrusted || !isFirstContact) {
+                        Log.i(TAG, "[AuraTransfer] Inbound transfer from trusted/recent peer $senderUserId - auto-approved")
+                        cancelSystemIncomingShareNotification(xferId)
+                        true
+                    } else {
+                        // Await user's explicit Accept or Decline decision (up to 60 seconds)
+                        withTimeoutOrNull(60000L) {
+                            decisionDeferred.await()
+                        } ?: false
+                    }
                     pendingHttpDecisions.remove(xferId)
                     if (accepted) {
                         recentlyApprovedSenders[senderUserId] = System.currentTimeMillis()
+                        AuraIdentityManager.markPeerTrusted(applicationContext, senderUserId, senderIdentityPubKey)
                     }
 
                     if (accepted) {

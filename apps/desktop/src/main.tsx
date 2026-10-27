@@ -5,13 +5,28 @@ import { DesktopIslandOverlay } from './components/DesktopIsland';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './index.css';
 
+function getInitialWindowLabel(): string {
+  try {
+    const win = getCurrentWebviewWindow();
+    return win?.label || 'main';
+  } catch {
+    return 'main';
+  }
+}
+
+const initialLabel = getInitialWindowLabel();
+if (initialLabel === 'island') {
+  document.documentElement.classList.add('island-window');
+  document.body.classList.add('island-window');
+}
+
 function Root() {
-  const [windowLabel, setWindowLabel] = useState<string>('main');
+  const [windowLabel, setWindowLabel] = useState<string>(initialLabel);
 
   useEffect(() => {
     try {
       const win = getCurrentWebviewWindow();
-      if (win && win.label) {
+      if (win && win.label && win.label !== windowLabel) {
         setWindowLabel(win.label);
         if (win.label === 'island') {
           document.documentElement.classList.add('island-window');
@@ -19,7 +34,7 @@ function Root() {
         }
       }
     } catch (_) {}
-  }, []);
+  }, [windowLabel]);
 
   if (windowLabel === 'island') {
     return <DesktopIslandOverlay />;
