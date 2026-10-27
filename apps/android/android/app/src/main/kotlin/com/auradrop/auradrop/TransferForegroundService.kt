@@ -10,6 +10,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.content.pm.ServiceInfo
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import java.io.File
@@ -17,6 +19,7 @@ import java.io.File
 class TransferForegroundService : Service() {
 
     companion object {
+        private const val TAG = "TransferService"
         const val CHANNEL_ID = "auradrop_transfers"
         const val CHANNEL_NAME = "AuraDrop Transfers"
         const val NOTIFICATION_ID = 4829
@@ -42,13 +45,34 @@ class TransferForegroundService : Service() {
         createNotificationChannel()
     }
 
+    private fun safeStartForeground(id: Int, notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    fgsType = fgsType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                }
+                startForeground(id, notification, fgsType)
+            } else {
+                startForeground(id, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "safeStartForeground with type failed, falling back: ${e.message}")
+            try {
+                startForeground(id, notification)
+            } catch (ignored: Exception) {
+                Log.e(TAG, "Fatal fallback startForeground failed: ${ignored.message}")
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
                 val title = intent.getStringExtra(EXTRA_TITLE) ?: "Transferring files..."
                 val progress = intent.getIntExtra(EXTRA_PROGRESS, 0)
                 val notification = buildOngoingNotification(title, progress, "Establishing data stream...")
-                startForeground(NOTIFICATION_ID, notification)
+                safeStartForeground(NOTIFICATION_ID, notification)
             }
             ACTION_UPDATE -> {
                 val now = System.currentTimeMillis()

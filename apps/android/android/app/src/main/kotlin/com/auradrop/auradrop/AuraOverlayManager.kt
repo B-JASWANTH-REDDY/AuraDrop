@@ -109,11 +109,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
-            if (isAppInForeground) {
-                Log.d(TAG, "App is in foreground - skipping floating NameDrop overlay")
-                return@post
-            }
             if (!canDrawOverlays()) {
                 Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
                 return@post
@@ -211,11 +206,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
-            if (isAppInForeground) {
-                Log.d(TAG, "App is in foreground - skipping floating TransferRequest overlay")
-                return@post
-            }
             if (!canDrawOverlays()) {
                 Log.w(TAG, "Overlay permission not granted; cannot display on mobile screen over other apps")
                 return@post
@@ -299,9 +289,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
     ) {
         mainHandler.post {
             dismissCurrentOverlay()
-            if (isAppInForeground) {
-                return@post
-            }
             if (!canDrawOverlays()) {
                 return@post
             }
@@ -373,11 +360,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
         onCancel: (() -> Unit)? = null
     ) {
         mainHandler.post {
-            // STRICT RULE: Overlay must NEVER show inside the AuraDrop app itself!
-            if (isAppInForeground) {
-                dismissCurrentOverlay()
-                return@post
-            }
             if (!canDrawOverlays()) return@post
 
             val view = currentOverlayView
@@ -474,10 +456,6 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
     fun markTransferComplete(fileName: String, totalBytes: Long) {
         mainHandler.post {
-            if (isAppInForeground) {
-                dismissCurrentOverlay()
-                return@post
-            }
             val view = currentOverlayView ?: return@post
             try {
                 val tvTitle = view.findViewById<TextView>(R.id.tv_title)

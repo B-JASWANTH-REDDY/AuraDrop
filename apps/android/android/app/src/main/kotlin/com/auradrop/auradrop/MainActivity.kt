@@ -781,7 +781,6 @@ class MainActivity : FlutterActivity() {
         super.onResume()
         isAppInForeground = true
         AuraOverlayManager.getInstance(this).isAppInForeground = true
-        AuraOverlayManager.getInstance(this).dismissCurrentOverlay()
         if (!AuraOverlayManager.getInstance(this).canDrawOverlays()) {
             mainHandler.postDelayed({
                 AuraOverlayManager.getInstance(this).requestOverlayPermission(this)
@@ -2972,6 +2971,33 @@ class MainActivity : FlutterActivity() {
     }
 
     // ----------------------------------------------------
+    // Robust URI & Direct File Stream Resolver
+    // ----------------------------------------------------
+    private fun openStreamSafely(uriOrPath: String): InputStream {
+        val trimmed = uriOrPath.trim()
+        if (trimmed.startsWith("content://", ignoreCase = true)) {
+            val uri = Uri.parse(trimmed)
+            return contentResolver.openInputStream(uri)
+                ?: throw FileNotFoundException("Could not open content stream: $trimmed")
+        }
+        val cleanPath = if (trimmed.startsWith("file://", ignoreCase = true)) {
+            Uri.parse(trimmed).path ?: trimmed.substring(7)
+        } else {
+            trimmed
+        }
+        val file = File(cleanPath)
+        if (file.exists() && file.canRead()) {
+            return FileInputStream(file)
+        }
+        return try {
+            contentResolver.openInputStream(Uri.parse(trimmed))
+                ?: FileInputStream(file)
+        } catch (_: Exception) {
+            FileInputStream(file)
+        }
+    }
+
+    // ----------------------------------------------------
     // TCP Streaming Client (High-Throughput Sender)
     // ----------------------------------------------------
     private suspend fun trySendFilesViaHttp(
@@ -2996,9 +3022,17 @@ class MainActivity : FlutterActivity() {
         for ((fileIdx, fileMap) in filesList.withIndex()) {
             if (transferSession.isCancelled.get()) return false
 
-            val uriStr = fileMap["uri"] as? String ?: continue
+            val uriStr = (fileMap["uri"] as? String)?.takeIf { it.isNotBlank() }
+                ?: (fileMap["path"] as? String)?.takeIf { it.isNotBlank() }
+                ?: continue
             val fileName = fileMap["name"] as? String ?: "file"
-            val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+            var fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+            if (fileSize <= 0L) {
+                try {
+                    val f = File(if (uriStr.startsWith("file://")) uriStr.substring(7) else uriStr)
+                    if (f.exists()) fileSize = f.length()
+                } catch (_: Exception) {}
+            }
             val fileTransferId = if (filesList.size == 1) transferId else "${transferId}_${fileIdx + 1}"
 
             sendEvent("dataChannelState", mapOf(
@@ -3146,8 +3180,16 @@ class MainActivity : FlutterActivity() {
             var sentBytes = 0L
             val buf = ByteArray(512 * 1024)
 
-            val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
-                ?: throw FileNotFoundException("Could not open URI: $uriStr")
+            val inputStream = try {
+                openStreamSafely(uriStr)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to open input stream for $fileName ($uriStr): ${e.message}")
+                sendEvent("transferError", mapOf(
+                    "transferId" to fileTransferId,
+                    "error" to "Could not read file '$fileName': ${e.message}"
+                ))
+                return false
+            }
 
             try {
                 inputStream.use { fis ->
@@ -3416,9 +3458,17 @@ class MainActivity : FlutterActivity() {
                 for (fileMap in filesList) {
                     if (session.isCancelled.get()) break
 
-                    val uriStr = fileMap["uri"] as? String ?: continue
+                    val uriStr = (fileMap["uri"] as? String)?.takeIf { it.isNotBlank() }
+                        ?: (fileMap["path"] as? String)?.takeIf { it.isNotBlank() }
+                        ?: continue
                     val fileName = fileMap["name"] as? String ?: "file"
-                    val fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+                    var fileSize = (fileMap["size"] as? Number)?.toLong() ?: 0L
+                    if (fileSize <= 0L) {
+                        try {
+                            val f = File(if (uriStr.startsWith("file://")) uriStr.substring(7) else uriStr)
+                            if (f.exists()) fileSize = f.length()
+                        } catch (_: Exception) {}
+                    }
                     val mimeType = fileMap["mimeType"] as? String ?: "application/octet-stream"
 
                     val fileDigest = MessageDigest.getInstance("SHA-256")
@@ -3435,8 +3485,16 @@ class MainActivity : FlutterActivity() {
                     output.write(buildFrame(0x20, startJson.toString().toByteArray()))
                     output.flush()
 
-                    val inputStream = contentResolver.openInputStream(Uri.parse(uriStr))
-                        ?: throw FileNotFoundException("Could not open file URI: $uriStr")
+                    val inputStream = try {
+                        openStreamSafely(uriStr)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to open file for $fileName ($uriStr): ${e.message}")
+                        sendEvent("transferError", mapOf(
+                            "transferId" to transferId,
+                            "error" to "Could not open file '$fileName': ${e.message}"
+                        ))
+                        continue
+                    }
 
                     var fileSent = 0L
                     var chunkIdx = 0

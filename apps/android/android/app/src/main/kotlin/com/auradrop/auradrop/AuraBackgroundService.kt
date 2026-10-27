@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
@@ -66,6 +67,27 @@ class AuraBackgroundService : Service() {
         Log.d(TAG, "AuraBackgroundService created - 24/7 discovery active")
     }
 
+    private fun safeStartForeground(id: Int, notification: Notification) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                var fgsType = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    fgsType = fgsType or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                }
+                startForeground(id, notification, fgsType)
+            } else {
+                startForeground(id, notification)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "safeStartForeground failed, falling back: ${e.message}")
+            try {
+                startForeground(id, notification)
+            } catch (ignored: Exception) {
+                Log.e(TAG, "Fatal fallback startForeground failed: ${ignored.message}")
+            }
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
@@ -76,7 +98,7 @@ class AuraBackgroundService : Service() {
             }
             else -> {
                 val notification = buildOngoingNotification()
-                startForeground(NOTIFICATION_ID, notification)
+                safeStartForeground(NOTIFICATION_ID, notification)
                 startBackgroundDiscoveryLoops()
             }
         }
