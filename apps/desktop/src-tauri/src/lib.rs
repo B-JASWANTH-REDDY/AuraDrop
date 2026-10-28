@@ -20,11 +20,20 @@ use std::io::Write;
 use tauri::Manager;
 use transfer::TransferService;
 
+fn get_app_log_dir() -> std::path::PathBuf {
+    let base = dirs::data_local_dir()
+        .unwrap_or_else(|| std::env::temp_dir())
+        .join("AuraDrop");
+    let _ = std::fs::create_dir_all(&base);
+    base
+}
+
 pub fn log_debug(msg: &str) {
+    let log_path = get_app_log_dir().join("debug.log");
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("C:\\Users\\bjasw\\Downloads\\AuraDrop-Windows\\debug.log")
+        .open(&log_path)
     {
         let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%H:%M:%S%.3f"), msg);
     }

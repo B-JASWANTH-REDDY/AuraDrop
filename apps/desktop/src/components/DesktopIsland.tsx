@@ -425,8 +425,12 @@ export const DesktopIsland: React.FC<{
           isIncoming: true,
         },
       });
-    } catch (err) {
+    } catch (err: any) {
       console.error('Accept transfer error:', err);
+      dispatch({
+        type: 'TRANSFER_FAILED',
+        payload: { error: `Failed to accept transfer: ${err?.message || err}` },
+      });
     }
   };
 
@@ -439,8 +443,10 @@ export const DesktopIsland: React.FC<{
         confirmed: false,
       });
       await invoke('cancel_transfer', { transferId: state.transferId });
-    } catch (_) {}
-    dispatch({ type: 'DISMISS' });
+    } catch (err) {
+      console.warn('Decline transfer cleanup error:', err);
+    }
+    dispatch({ type: 'TRANSFER_CANCELLED' });
   };
 
   // Open file or folder

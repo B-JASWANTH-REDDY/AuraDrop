@@ -622,11 +622,11 @@ class AuraLanServer {
       return;
     }
 
-    // Validate SHA-256 format if provided
+    // Validate SHA-256 format (required 64-character hex)
     final sha256Expected = data['sha256']?.toString() ?? '';
-    if (sha256Expected.isNotEmpty && !_sha256Regex.hasMatch(sha256Expected)) {
+    if (sha256Expected.isEmpty || !_sha256Regex.hasMatch(sha256Expected)) {
       request.response.statusCode = HttpStatus.badRequest;
-      request.response.write(jsonEncode({'error': 'Invalid sha256 format'}));
+      request.response.write(jsonEncode({'error': 'Invalid or missing sha256 format (64-character hex required)'}));
       await request.response.close();
       return;
     }
@@ -851,8 +851,8 @@ class AuraLanServer {
         return;
       }
 
-      // Verify SHA-256 checksum (required when sha256 was declared)
-      if (expectedSha.isNotEmpty && calculatedSha.toLowerCase() != expectedSha.toLowerCase()) {
+      // Verify SHA-256 checksum (mandatory for all files)
+      if (expectedSha.length != 64 || calculatedSha.toLowerCase() != expectedSha.toLowerCase()) {
         if (await partFile.exists()) await partFile.delete();
         request.response.statusCode = HttpStatus.badRequest;
         request.response.headers.contentType = ContentType.json;

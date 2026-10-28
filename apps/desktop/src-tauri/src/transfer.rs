@@ -240,21 +240,22 @@ impl TransferService {
         let my_name = self.identity.get_device_name().await;
         let transfer_id = Uuid::new_v4().to_string();
 
-        // Calculate SHA-256 in-flight or streamed for verification
-        let sha256_hash = if file_size <= 50 * 1024 * 1024 {
-            let mut hasher = Sha256::new();
-            if let Ok(mut f) = File::open(&path) {
-                let mut buf = [0u8; 512 * 1024];
+        // Calculate genuine SHA-256 in a bounded-memory streaming pass for verification (no whole-file buffering)
+        let mut hasher = Sha256::new();
+        let sha256_hash = match File::open(&path) {
+            Ok(mut f) => {
+                let mut buf = [0u8; 1024 * 1024]; // 1 MiB bounded buffer
                 while let Ok(n) = f.read(&mut buf) {
                     if n == 0 { break; }
                     hasher.update(&buf[..n]);
                 }
                 hex::encode(hasher.finalize())
-            } else {
-                format!("stream_{}", transfer_id)
             }
-        } else {
-            format!("stream_{}", transfer_id)
+            Err(e) => {
+                let err = format!("Cannot open file to compute SHA-256 digest: {}", e);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
         };
 
         // Emit initial status: awaiting recipient's Accept/Decline decision
@@ -314,12 +315,19 @@ impl TransferService {
             "senderSignature": sender_signature_hex,
         });
 
-        let prep_res = client
+        let prep_res = match client
             .post(&prep_url)
             .json(&prep_body)
             .send()
             .await
-            .map_err(|e| format!("Prepare upload connection failed: {}", e))?;
+        {
+            Ok(res) => res,
+            Err(e) => {
+                let err = format!("Prepare upload connection failed: {}", e);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
+        };
 
         if !prep_res.status().is_success() {
             let err = format!("Recipient declined or rejected transfer: HTTP {}", prep_res.status());
@@ -327,10 +335,14 @@ impl TransferService {
             return Err(err);
         }
 
-        let prep_data: PrepareUploadResponse = prep_res
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse prepare response: {}", e))?;
+        let prep_data: PrepareUploadResponse = match prep_res.json().await {
+            Ok(d) => d,
+            Err(e) => {
+                let err = format!("Failed to parse prepare response: {}", e);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
+        };
 
         if !prep_data.accepted {
             let err = "Transfer declined by recipient".to_string();
@@ -340,12 +352,30 @@ impl TransferService {
 
         let is_aead = prep_data.encryption.as_deref() == Some("aead-aes256-gcm");
         let (session_key, sas_code) = if is_aead {
-            let receiver_eph_hex = prep_data.receiver_eph_pub_key.as_ref()
-                .ok_or_else(|| "Recipient omitted ephemeral public key".to_string())?;
-            let receiver_identity_hex = prep_data.receiver_identity_pub_key.as_ref()
-                .ok_or_else(|| "Recipient omitted identity public key".to_string())?;
-            let receiver_sig_hex = prep_data.receiver_signature.as_ref()
-                .ok_or_else(|| "Recipient omitted cryptographic signature".to_string())?;
+            let receiver_eph_hex = match prep_data.receiver_eph_pub_key.as_ref() {
+                Some(k) => k,
+                None => {
+                    let err = "Recipient omitted ephemeral public key".to_string();
+                    self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                    return Err(err);
+                }
+            };
+            let receiver_identity_hex = match prep_data.receiver_identity_pub_key.as_ref() {
+                Some(k) => k,
+                None => {
+                    let err = "Recipient omitted identity public key".to_string();
+                    self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                    return Err(err);
+                }
+            };
+            let receiver_sig_hex = match prep_data.receiver_signature.as_ref() {
+                Some(s) => s,
+                None => {
+                    let err = "Recipient omitted cryptographic signature".to_string();
+                    self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                    return Err(err);
+                }
+            };
             let target_peer_id = prep_data.receiver_id.as_deref().unwrap_or(&peer_ip);
 
             // Verify receiver's cryptographic signature and Trust Store identity
@@ -358,16 +388,20 @@ impl TransferService {
                 &sender_eph_pub_hex,
                 receiver_eph_hex,
             );
-            let is_first_contact = self.identity.verify_peer_handshake(
+            let is_first_contact = match self.identity.verify_peer_handshake(
                 target_peer_id,
                 receiver_identity_hex,
                 &receiver_transcript,
                 receiver_sig_hex,
-            ).await.map_err(|e| {
-                let err = format!("Cryptographic recipient authentication failed: {}", e);
-                crate::log_debug(&err);
-                err
-            })?;
+            ).await {
+                Ok(fc) => fc,
+                Err(e) => {
+                    let err = format!("Cryptographic recipient authentication failed: {}", e);
+                    crate::log_debug(&err);
+                    self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                    return Err(err);
+                }
+            };
 
             // Perform ECDH agreement and derive directional keys bound to both identities
             let receiver_pub_bytes = hex::decode(receiver_eph_hex)
@@ -561,14 +595,62 @@ impl TransferService {
             req_builder = req_builder.header("x-encryption", "none");
         }
 
-        let res = req_builder
+        let res = match req_builder
             .body(reqwest::Body::wrap_stream(reader_stream))
             .send()
             .await
-            .map_err(|e| format!("Upload stream error: {}", e))?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err = format!("Upload stream error: {}", e);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
+        };
 
         if !res.status().is_success() {
             let err = format!("Upload failed: HTTP {}", res.status());
+            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+            return Err(err);
+        }
+
+        // Validate authenticated receiver completion receipt
+        let receipt_text = match res.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                let err = format!("Failed to read receiver completion receipt: {}", e);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
+        };
+        let receipt: serde_json::Value = match serde_json::from_str(&receipt_text) {
+            Ok(j) => j,
+            Err(e) => {
+                let err = format!("Invalid receiver receipt JSON ({}): {}", e, receipt_text);
+                self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+                return Err(err);
+            }
+        };
+
+        let receipt_verified = receipt["verified"].as_bool().unwrap_or(false)
+            || receipt["sha256Verified"].as_bool().unwrap_or(false);
+        let receipt_sha = receipt["sha256"].as_str().unwrap_or("");
+        let receipt_transfer_id = receipt["transferId"].as_str().unwrap_or("");
+
+        if !receipt_verified {
+            let err = format!("Receiver reported verification failed in receipt: {}", receipt_text);
+            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+            return Err(err);
+        }
+
+        if !receipt_transfer_id.is_empty() && receipt_transfer_id != transfer_id {
+            let err = format!("Receiver receipt transfer ID mismatch: expected {}, got {}", transfer_id, receipt_transfer_id);
+            self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
+            return Err(err);
+        }
+
+        if !receipt_sha.is_empty() && !receipt_sha.eq_ignore_ascii_case(&sha256_hash) {
+            let err = format!("Receiver receipt SHA-256 mismatch: expected {}, got {}", sha256_hash, receipt_sha);
             self.emit_error(&transfer_id, &file_name, file_size, &peer_name, false, &err).await;
             return Err(err);
         }
@@ -766,6 +848,21 @@ async fn handle_prepare_upload(
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({"error": "Filename must not be empty"})),
+        ));
+    }
+
+    // Validate SHA-256 strictly (must be 64-character hex string; placeholders rejected)
+    let sha_input = payload.sha256.trim();
+    if sha_input.is_empty()
+        || sha_input.len() != 64
+        || !sha_input.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Missing or malformed SHA-256 digest in prepare request (must be 64 hex characters)",
+                "accepted": false
+            })),
         ));
     }
 
@@ -1217,28 +1314,61 @@ async fn handle_upload(
     // Checkpoint resume: if session contains verified resume offset, pre-hash already committed disk prefix
     if let Some(res_off) = session.resume_offset {
         if res_off > 0 && temp_file_path.exists() {
-            if let Ok(mut existing_file) = File::open(&temp_file_path) {
-                let mut prefix_buf = vec![0u8; 512 * 1024];
-                let mut prefix_read = 0u64;
-                while prefix_read < res_off {
-                    let to_read = (res_off - prefix_read).min(prefix_buf.len() as u64) as usize;
-                    match existing_file.read(&mut prefix_buf[..to_read]) {
-                        Ok(0) => break,
-                        Ok(n) => {
-                            hasher.update(&prefix_buf[..n]);
-                            prefix_read += n as u64;
-                        }
-                        Err(_) => break,
+            let actual_part_len = fs::metadata(&temp_file_path).map(|m| m.len()).unwrap_or(0);
+            if actual_part_len >= res_off {
+                // If there is uncommitted trailing data beyond the checkpoint offset, safely truncate it
+                if actual_part_len > res_off {
+                    if let Ok(file_to_trunc) = File::options().write(true).open(&temp_file_path) {
+                        let _ = file_to_trunc.set_len(res_off);
                     }
                 }
-                if prefix_read == res_off {
-                    transferred = res_off;
-                    chunk_index = session.resume_chunk_index.unwrap_or(0);
-                    crate::log_debug(&format!(
-                        "[AuraTransfer] Inbound resume: pre-hashed {} prefix bytes (resuming chunk index {})",
-                        transferred, chunk_index
-                    ));
+
+                let mut prehash_success = false;
+                if let Ok(mut existing_file) = File::open(&temp_file_path) {
+                    let mut prefix_buf = vec![0u8; 512 * 1024];
+                    let mut prefix_read = 0u64;
+                    let mut prefix_hasher = Sha256::new();
+                    while prefix_read < res_off {
+                        let to_read = (res_off - prefix_read).min(prefix_buf.len() as u64) as usize;
+                        match existing_file.read(&mut prefix_buf[..to_read]) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                prefix_hasher.update(&prefix_buf[..n]);
+                                prefix_read += n as u64;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if prefix_read == res_off {
+                        hasher = prefix_hasher;
+                        transferred = res_off;
+                        chunk_index = session.resume_chunk_index.unwrap_or(0);
+                        prehash_success = true;
+                        crate::log_debug(&format!(
+                            "[AuraTransfer] Inbound resume: verified and pre-hashed {} prefix bytes (chunk {})",
+                            transferred, chunk_index
+                        ));
+                    }
                 }
+
+                if !prehash_success {
+                    crate::log_debug("[AuraTransfer] Inbound resume prefix read failed or truncated; invalidating checkpoint");
+                    hasher = Sha256::new();
+                    transferred = 0;
+                    chunk_index = 0;
+                    let _ = fs::remove_file(&temp_file_path);
+                    let _ = fs::remove_file(&resume_meta_path);
+                }
+            } else {
+                crate::log_debug(&format!(
+                    "[AuraTransfer] Inbound resume error: partial file length {} is shorter than checkpoint offset {}; invalidating checkpoint",
+                    actual_part_len, res_off
+                ));
+                hasher = Sha256::new();
+                transferred = 0;
+                chunk_index = 0;
+                let _ = fs::remove_file(&temp_file_path);
+                let _ = fs::remove_file(&resume_meta_path);
             }
         }
     }
@@ -1519,23 +1649,23 @@ async fn handle_upload(
         ));
     }
 
-    // Verify SHA-256
+    // Verify SHA-256 integrity strictly
     let calculated_hash = hex::encode(hasher.finalize());
     let sha_expected = session.sha256_expected.trim();
-    if !sha_expected.is_empty() && !sha_expected.starts_with("stream_") {
-        if !calculated_hash.eq_ignore_ascii_case(sha_expected) {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            let _ = tokio::fs::remove_file(&resume_meta_path).await;
-            service.sessions.write().await.remove(&transfer_id);
-            return Err((
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({
-                    "error": "Checksum verification failed: SHA-256 integrity mismatch",
-                    "expected": sha_expected,
-                    "actual": calculated_hash
-                })),
-            ));
-        }
+    if sha_expected.is_empty() || !calculated_hash.eq_ignore_ascii_case(sha_expected) {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
+        service.sessions.write().await.remove(&transfer_id);
+        return Err((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({
+                "error": "Checksum verification failed: SHA-256 integrity mismatch",
+                "expected": sha_expected,
+                "actual": calculated_hash,
+                "verified": false,
+                "sha256Verified": false
+            })),
+        ));
     }
 
     // Atomic rename from temporary file to final committed path

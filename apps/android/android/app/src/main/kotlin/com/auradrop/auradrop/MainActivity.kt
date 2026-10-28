@@ -2509,21 +2509,42 @@ class MainActivity : FlutterActivity() {
 
                     // Check if resuming from partial upload checkpoint
                     val declaredResumeOffset = headers["x-resume-offset"]?.toLongOrNull() ?: sessionMeta.resumeOffset
-                    if (declaredResumeOffset != null && declaredResumeOffset > 0L && tempPartFile.exists() && tempPartFile.length() == declaredResumeOffset) {
-                        Log.i(TAG, "[AuraTransfer] Resuming inbound upload from byte $declaredResumeOffset")
-                        val prehashBuf = ByteArray(512 * 1024)
-                        FileInputStream(tempPartFile).use { rIn ->
-                            var remainingToHash = declaredResumeOffset
-                            while (remainingToHash > 0) {
-                                val toRead = Math.min(prehashBuf.size.toLong(), remainingToHash).toInt()
-                                val r = rIn.read(prehashBuf, 0, toRead)
-                                if (r <= 0) break
-                                digest.update(prehashBuf, 0, r)
-                                remainingToHash -= r
+                    if (declaredResumeOffset != null && declaredResumeOffset > 0L && tempPartFile.exists() && tempPartFile.length() >= declaredResumeOffset) {
+                        try {
+                            if (tempPartFile.length() > declaredResumeOffset) {
+                                java.io.RandomAccessFile(tempPartFile, "rw").use { raf ->
+                                    raf.setLength(declaredResumeOffset)
+                                }
                             }
+                            Log.i(TAG, "[AuraTransfer] Resuming inbound upload from byte $declaredResumeOffset")
+                            val prehashBuf = ByteArray(512 * 1024)
+                            var remainingToHash = declaredResumeOffset
+                            FileInputStream(tempPartFile).use { rIn ->
+                                while (remainingToHash > 0L) {
+                                    val toRead = Math.min(prehashBuf.size.toLong(), remainingToHash).toInt()
+                                    val r = rIn.read(prehashBuf, 0, toRead)
+                                    if (r <= 0) break
+                                    digest.update(prehashBuf, 0, r)
+                                    remainingToHash -= r
+                                }
+                            }
+                            if (remainingToHash == 0L) {
+                                totalWritten = declaredResumeOffset
+                                chunkIndex = headers["x-chunk-index"]?.toLongOrNull() ?: sessionMeta.resumeChunkIndex ?: (declaredResumeOffset / (512 * 1024))
+                            } else {
+                                Log.w(TAG, "[AuraTransfer] Incomplete partial file prefix during resume; resetting")
+                                digest.reset()
+                                totalWritten = 0L
+                                chunkIndex = 0L
+                                try { tempPartFile.delete() } catch (_: Exception) {}
+                                try { resumeJsonFile.delete() } catch (_: Exception) {}
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "[AuraTransfer] Resume prehash error: $e")
+                            digest.reset()
+                            totalWritten = 0L
+                            chunkIndex = 0L
                         }
-                        totalWritten = declaredResumeOffset
-                        chunkIndex = headers["x-chunk-index"]?.toLongOrNull() ?: sessionMeta.resumeChunkIndex ?: (declaredResumeOffset / (512 * 1024))
                     }
 
                     val startTime = System.currentTimeMillis()
@@ -2742,20 +2763,18 @@ class MainActivity : FlutterActivity() {
                     }
 
                     val calculatedSha256 = digest.digest().toHex()
-                    if (expectedSha256.isNotEmpty() && !expectedSha256.startsWith("stream_")) {
-                        if (!calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
-                            try { tempPartFile.delete() } catch (_: Exception) {}
-                            try { resumeJsonFile.delete() } catch (_: Exception) {}
-                            httpUploadSessions.remove(xferId)
-                            stopForegroundTransferService()
-                            AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
-                            sendJsonResponse(422, "Unprocessable Entity", JSONObject().apply {
-                                put("error", "SHA-256 integrity mismatch")
-                                put("expected", expectedSha256)
-                                put("actual", calculatedSha256)
-                            })
-                            return@withContext
-                        }
+                    if (expectedSha256.length != 64 || !calculatedSha256.equals(expectedSha256, ignoreCase = true)) {
+                        try { tempPartFile.delete() } catch (_: Exception) {}
+                        try { resumeJsonFile.delete() } catch (_: Exception) {}
+                        httpUploadSessions.remove(xferId)
+                        stopForegroundTransferService()
+                        AuraOverlayManager.getInstance(applicationContext).dismissCurrentOverlay()
+                        sendJsonResponse(422, "Unprocessable Entity", JSONObject().apply {
+                            put("error", "SHA-256 integrity mismatch")
+                            put("expected", expectedSha256)
+                            put("actual", calculatedSha256)
+                        })
+                        return@withContext
                     }
 
                     // Atomic rename from temp file to final destination with fallback copy

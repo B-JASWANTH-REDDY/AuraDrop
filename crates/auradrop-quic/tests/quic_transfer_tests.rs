@@ -109,6 +109,7 @@ async fn test_quic_rejects_invalid_token() {
     let dest_file_path = temp_dir.path().join("received_payload.bin");
 
     let payload = b"Test secret data for invalid token test";
+    let payload_sha = hex::encode(Sha256::digest(payload));
     tokio::fs::write(&src_file_path, payload).await.unwrap();
 
     let receiver = QuicEngine::start("127.0.0.1:0".parse().unwrap(), "receiver_node_2").await.unwrap();
@@ -119,7 +120,7 @@ async fn test_quic_rejects_invalid_token() {
         token: "tok_correct".to_string(),
         file_name: "test.txt".to_string(),
         file_size: payload.len() as u64,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha.clone(),
         destination_path: dest_file_path.clone(),
         expires_at: Instant::now() + Duration::from_secs(60),
         ..Default::default()
@@ -133,7 +134,7 @@ async fn test_quic_rejects_invalid_token() {
         one_time_token: "tok_FORGED_WRONG".to_string(),
         file_name: "test.txt".to_string(),
         file_size: payload.len() as u64,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha,
         sender_device_id: "sender_node_2".to_string(),
         client_version: "2.0.1".to_string(),
     };
@@ -225,6 +226,7 @@ async fn test_quic_cancellation() {
 
     // 5 MB payload so we have time to cancel mid-transfer
     let payload = vec![0xAB; 5 * 1024 * 1024];
+    let payload_sha = hex::encode(Sha256::digest(&payload));
     tokio::fs::write(&src_file_path, &payload).await.unwrap();
 
     let receiver = QuicEngine::start("127.0.0.1:0".parse().unwrap(), "receiver_node_4").await.unwrap();
@@ -235,7 +237,7 @@ async fn test_quic_cancellation() {
         token: "tok_cancel_1".to_string(),
         file_name: "cancelled_dest.bin".to_string(),
         file_size: payload.len() as u64,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha.clone(),
         destination_path: dest_file_path.clone(),
         expires_at: Instant::now() + Duration::from_secs(60),
         ..Default::default()
@@ -248,7 +250,7 @@ async fn test_quic_cancellation() {
         one_time_token: "tok_cancel_1".to_string(),
         file_name: "cancelled_dest.bin".to_string(),
         file_size: payload.len() as u64,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha,
         sender_device_id: "sender_node_4".to_string(),
         client_version: "2.0.1".to_string(),
     };
@@ -344,7 +346,9 @@ async fn test_quic_expired_token_rejection() {
     let src_file_path = temp_dir.path().join("expired_source.bin");
     let dest_file_path = temp_dir.path().join("expired_dest.bin");
 
-    tokio::fs::write(&src_file_path, b"expired data").await.unwrap();
+    let payload = b"expired data";
+    let payload_sha = hex::encode(Sha256::digest(payload));
+    tokio::fs::write(&src_file_path, payload).await.unwrap();
 
     let receiver = QuicEngine::start("127.0.0.1:0".parse().unwrap(), "receiver_exp").await.unwrap();
     let receiver_addr = receiver.local_addr().unwrap();
@@ -355,7 +359,7 @@ async fn test_quic_expired_token_rejection() {
         token: "tok_expired".to_string(),
         file_name: "expired_dest.bin".to_string(),
         file_size: 12,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha.clone(),
         destination_path: dest_file_path.clone(),
         expires_at: Instant::now() - Duration::from_secs(5),
         ..Default::default()
@@ -368,7 +372,7 @@ async fn test_quic_expired_token_rejection() {
         one_time_token: "tok_expired".to_string(),
         file_name: "expired_dest.bin".to_string(),
         file_size: 12,
-        expected_sha256: "".to_string(),
+        expected_sha256: payload_sha,
         sender_device_id: "sender_exp".to_string(),
         client_version: "2.0.1".to_string(),
     };

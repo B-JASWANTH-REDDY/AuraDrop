@@ -330,14 +330,11 @@ impl QuicEngine {
         let calculated_hash = hex::encode(hasher.finalize()).to_lowercase();
         let expected_hash = header.expected_sha256.to_lowercase();
 
-        if !expected_hash.is_empty()
-            && !expected_hash.starts_with("stream_")
-            && calculated_hash != expected_hash
-        {
+        if expected_hash.len() != 64 || calculated_hash != expected_hash {
             let _ = tokio::fs::remove_file(&temp_path).await;
             send_stream.write_all(&STATUS_HASH_MISMATCH.to_be_bytes()).await?;
             return Err(format!(
-                "SHA-256 mismatch: expected {}, got {}",
+                "SHA-256 verification failed: expected {}, calculated {}",
                 expected_hash, calculated_hash
             )
             .into());

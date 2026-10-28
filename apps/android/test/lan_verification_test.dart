@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,9 @@ import 'package:auradrop/services/aura_lan_server.dart';
 import 'package:auradrop/services/aura_discovery_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = null;
+
   test('AuraDrop V28 Physical LAN Network Engine Verification', () async {
     // 1. Initialize identity
     final id = AuraIdentityService();

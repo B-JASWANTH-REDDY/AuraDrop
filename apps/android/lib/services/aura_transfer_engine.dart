@@ -141,7 +141,8 @@ class AuraTransferEngine {
         final digest = await localFile.openRead().transform(sha256).single;
         expectedSha = digest.toString();
       } catch (e) {
-        debugPrint('[AuraTransfer] Non-fatal SHA precompute notice: $e');
+        _errorController.add('Failed to compute file SHA-256 integrity hash: $e');
+        return false;
       }
     }
 
@@ -289,12 +290,25 @@ class AuraTransferEngine {
         final respBody = await uploadResp.transform(utf8.decoder).join();
         final respData = jsonDecode(respBody);
 
+        final receiverVerified = respData is Map && respData['verified'] == true;
+        final receiverSha = (respData is Map ? respData['sha256']?.toString() : '') ?? '';
+
+        if (!receiverVerified) {
+          _errorController.add('Receiver failed integrity verification: verified status false');
+          return false;
+        }
+
+        if (receiverSha.isNotEmpty && receiverSha.toLowerCase() != expectedSha.toLowerCase()) {
+          _errorController.add('Receiver integrity verification mismatch: expected $expectedSha, got $receiverSha');
+          return false;
+        }
+
         _completedController.add({
           'transferId': transferId,
           'fileName': fileName,
           'fileSize': resolvedFileSize,
           'sha256': expectedSha,
-          'verified': respData['verified'] == true,
+          'verified': true,
           'isSender': true,
         });
 

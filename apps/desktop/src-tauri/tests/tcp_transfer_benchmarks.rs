@@ -640,12 +640,10 @@ async fn bench_handle_upload(
 
     let calculated_hash = hex::encode(hasher.finalize());
     let expected_sha = session.sha256_expected.trim();
-    if !expected_sha.is_empty() && !expected_sha.starts_with("stream_") {
-        if !calculated_hash.eq_ignore_ascii_case(expected_sha) {
-            let _ = tokio::fs::remove_file(&temp_file_path).await;
-            let _ = tokio::fs::remove_file(&resume_meta_path).await;
-            return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": "SHA-256 integrity mismatch"}))));
-        }
+    if expected_sha.len() != 64 || !calculated_hash.eq_ignore_ascii_case(expected_sha) {
+        let _ = tokio::fs::remove_file(&temp_file_path).await;
+        let _ = tokio::fs::remove_file(&resume_meta_path).await;
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({"error": "SHA-256 integrity mismatch"}))));
     }
 
     if let Err(e) = tokio::fs::rename(&temp_file_path, &final_dest).await {
@@ -878,6 +876,7 @@ async fn test_adversarial_suite() {
     // -----------------------------------------------------------------------------------------
     let sender_eph = EphemeralKeyExchange::generate().unwrap();
     let plain_bytes = vec![77u8; 100];
+    let expected_tamper_sha = hex::encode(Sha256::digest(&plain_bytes));
 
     let prep_tamper_res = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
@@ -885,7 +884,7 @@ async fn test_adversarial_suite() {
             "transferId": "adv_tamper_02",
             "fileName": "tampered_payload.bin",
             "fileSize": 100,
-            "sha256": "stream_adv_tamper_02",
+            "sha256": expected_tamper_sha,
             "senderUserId": client_id,
             "senderEphPubKey": sender_eph.public_key_hex()
         }))
@@ -934,13 +933,14 @@ async fn test_adversarial_suite() {
     // Scenario 3: Repeated / out-of-order chunk (sequence counter mismatch)
     // -----------------------------------------------------------------------------------------
     let sender_eph_seq = EphemeralKeyExchange::generate().unwrap();
+    let expected_seq_sha = hex::encode(Sha256::digest(&vec![77u8; 200]));
     let prep_seq_res = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
         .json(&json!({
             "transferId": "adv_seq_03",
             "fileName": "replay_chunk.bin",
             "fileSize": 200,
-            "sha256": "stream_adv_seq_03",
+            "sha256": expected_seq_sha,
             "senderUserId": client_id,
             "senderEphPubKey": sender_eph_seq.public_key_hex()
         }))
@@ -990,13 +990,14 @@ async fn test_adversarial_suite() {
     // Scenario 4: Truncated transfer / abrupt disconnect (under-delivered bytes)
     // -----------------------------------------------------------------------------------------
     let sender_eph_trunc = EphemeralKeyExchange::generate().unwrap();
+    let expected_trunc_sha = hex::encode(Sha256::digest(&vec![11u8; 500]));
     let prep_trunc_res = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
         .json(&json!({
             "transferId": "adv_trunc_04",
             "fileName": "truncated.bin",
             "fileSize": 500, // Advertised 500 bytes
-            "sha256": "stream_adv_trunc_04",
+            "sha256": expected_trunc_sha,
             "senderUserId": client_id,
             "senderEphPubKey": sender_eph_trunc.public_key_hex()
         }))
@@ -1247,13 +1248,14 @@ async fn test_adversarial_suite() {
     // Scenario 14: Oversized Payload Beyond Declared Size Rejection
     // -----------------------------------------------------------------------------------------
     let sender_eph_over = EphemeralKeyExchange::generate().unwrap();
+    let expected_over_sha = hex::encode(Sha256::digest(&vec![5u8; 50]));
     let prep_over_res = client
         .post(format!("{}/api/auradrop/v1/prepare-upload", base_url))
         .json(&json!({
             "transferId": "adv_over_14",
             "fileName": "oversized.bin",
             "fileSize": 50,
-            "sha256": "stream_adv_over_14",
+            "sha256": expected_over_sha,
             "senderUserId": client_id,
             "senderEphPubKey": sender_eph_over.public_key_hex()
         }))
