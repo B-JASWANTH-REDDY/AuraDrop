@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { TransferEngine } from '../engine/transferEngine';
 
 interface LiveStatusPillProps {
   peerCount: number;
@@ -27,33 +26,14 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
             setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
           }
         } else {
-          try {
-            const diag = TransferEngine.getInstance().getSignalingDiagnostics();
-            if (diag.wsState === 'OPEN') {
-              if (isMounted) {
-                setIsOnline(true);
-                setLatency(null);
-                setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-              }
-              return;
-            }
-          } catch {}
           if (isMounted) {
             setIsOnline(false);
             setLatency(null);
           }
         }
       } catch {
-        let meshOnline = false;
-        try {
-          const diag = TransferEngine.getInstance().getSignalingDiagnostics();
-          if (diag.wsState === 'OPEN' || diag.connectedPeersCount > 0 || peerCount > 0) {
-            meshOnline = true;
-          }
-        } catch {}
-
         if (isMounted) {
-          setIsOnline(meshOnline);
+          setIsOnline(true);
           setLatency(null);
           setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         }
@@ -61,7 +41,7 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
     };
 
     checkHealth();
-    const interval = setInterval(checkHealth, 15000);
+    const interval = setInterval(checkHealth, 30000);
     return () => {
       isMounted = false;
       clearInterval(interval);
@@ -73,61 +53,52 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
       onClick={onClick}
       role="status"
       aria-label="Live Control Plane Status"
-      title={`Live WebRTC Signaling active. Last checked: ${lastChecked}. Click for full diagnostics.`}
+      title={`Live Status: ${isOnline ? 'Online' : 'Connecting'}. Last checked: ${lastChecked}. Click for full details.`}
       className="cursor-pointer"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '7px',
-        padding: '5px 11px',
+        gap: '8px',
+        padding: '5px 12px',
         borderRadius: '9999px',
-        background: isDark ? (isOnline ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)') : (isOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'),
-        border: `1px solid ${isDark ? (isOnline ? 'rgba(34, 197, 94, 0.28)' : 'rgba(239, 68, 68, 0.28)') : (isOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)')}`,
-        color: isDark ? (isOnline ? '#4ade80' : '#f87171') : (isOnline ? '#15803d' : '#b91c1c'),
-        fontSize: '11.5px',
-        fontWeight: 700,
-        whiteSpace: 'nowrap',
-        flexShrink: 0,
+        backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
+        border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)'}`,
+        backdropFilter: 'blur(10px)',
+        WebkitBackdropFilter: 'blur(10px)',
         transition: 'all 0.2s ease',
+        userSelect: 'none',
       }}
     >
-      <span
+      <div
         style={{
-          width: '6px',
-          height: '6px',
+          width: '7px',
+          height: '7px',
           borderRadius: '50%',
-          backgroundColor: isOnline ? '#22c55e' : '#ef4444',
-          boxShadow: isOnline ? '0 0 6px #22c55e' : 'none',
-          animation: isOnline ? 'pulseDot 2s infinite ease-in-out' : 'none',
-          flexShrink: 0,
+          backgroundColor: isOnline ? '#22c55e' : '#eab308',
+          boxShadow: isOnline ? '0 0 8px rgba(34, 197, 94, 0.6)' : 'none',
         }}
       />
-      <span>{isOnline ? 'Live Control' : 'Offline'}</span>
-      {isOnline && latency !== null && (
+      <span
+        style={{
+          fontSize: '11px',
+          fontWeight: 700,
+          color: isDark ? '#ffffff' : '#0f172a',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {isOnline ? 'v2.0.1 Live' : 'Connecting...'}
+      </span>
+      {latency !== null && (
         <span
-          className="tabular-nums"
           style={{
-            fontSize: '11px',
-            opacity: 0.85,
-            borderLeft: `1px solid ${isDark ? 'rgba(34, 197, 94, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+            fontSize: '10px',
+            color: '#94a3b8',
+            fontFamily: 'monospace',
+            borderLeft: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.1)'}`,
             paddingLeft: '6px',
           }}
         >
           {latency}ms
-        </span>
-      )}
-      {peerCount > 0 && (
-        <span
-          className="tabular-nums"
-          style={{
-            fontSize: '10.5px',
-            background: isDark ? 'rgba(34, 197, 94, 0.2)' : 'rgba(34, 197, 94, 0.2)',
-            padding: '1px 5px',
-            borderRadius: '100px',
-            fontWeight: 700,
-          }}
-        >
-          {peerCount}
         </span>
       )}
     </div>

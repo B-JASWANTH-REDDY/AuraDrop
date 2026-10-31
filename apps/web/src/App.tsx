@@ -7,7 +7,6 @@ import { CookieConsentBanner } from './components/CookieConsentBanner';
 import { CommandMenu } from './components/CommandMenu';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
 import { AirDropNotification } from './components/AirDropNotification';
-import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
 import { analytics } from './engine/analytics';
 import { PeerDevice, TransferProgress } from './types';
 
@@ -84,13 +83,11 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const isDark = theme === 'dark';
 
-  // Real Production Transfer Engine Instance
-  const engine = TransferEngine.getInstance();
-  const [discoveredPeers, setDiscoveredPeers] = useState<PeerDevice[]>([]);
-  const peers = discoveredPeers.length > 0 ? discoveredPeers : DEMO_PEERS;
-  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(null);
+  // Showcase Demo Peers & State (Native Apps Presentation)
+  const peers = DEMO_PEERS;
+  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(DEMO_PEERS[0]);
 
-  // Active AirDrop Transfer Progress
+  // Active AirDrop Transfer Progress (Interactive Showcase)
   const [activeTransfer, setActiveTransfer] = useState<TransferProgress | null>(null);
   const [incomingAirDrop, setIncomingAirDrop] = useState<{
     isOpen: boolean;
@@ -104,146 +101,97 @@ export const App: React.FC = () => {
 
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const demoTimerRef = useRef<any>(null);
 
-  // Open Second Tab Helper
-  const handleOpenSecondTab = () => {
-    window.open(window.location.href, '_blank');
+  // Interactive AirDrop Simulation for Showcase Visitors
+  const runShowcaseDemo = (customFile?: File) => {
+    if (demoTimerRef.current) clearInterval(demoTimerRef.current);
+
+    const targetPeer = selectedPeer || DEMO_PEERS[0];
+    const fileName = customFile ? customFile.name : '4K_Cinematic_Footage.mp4';
+    const fileSize = customFile ? customFile.size : 450 * 1024 * 1024;
+    const fmtSize =
+      fileSize < 1024 * 1024
+        ? `${(fileSize / 1024).toFixed(1)} KB`
+        : `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
+
+    setIncomingAirDrop({
+      isOpen: true,
+      senderName: targetPeer.name,
+      fileName,
+      fileSize,
+      totalSizeText: fmtSize,
+      transferId: 'showcase_' + Date.now(),
+    });
+
+    setActiveTransfer({
+      transferId: 'showcase_' + Date.now(),
+      fileName,
+      fileSize,
+      transferredBytes: 0,
+      verifiedBytes: 0,
+      speedBytesPerSec: 124.8 * 1024 * 1024,
+      etaSeconds: 4,
+      state: 'WAITING_FOR_ACCEPTANCE',
+      isIncoming: true,
+      peerName: targetPeer.name,
+      transport: 'Native LAN Turbo (124+ MB/s)',
+    });
   };
 
-  // Subscribe to real TransferEngine peers & lifecycle events
-  useEffect(() => {
-    const unlistenPeers = engine.onPeersUpdated((list) => {
-      setDiscoveredPeers(list);
-      setSelectedPeer((curr) => {
-        if (curr && list.some((p) => p.deviceId === curr.deviceId || p.id === curr.id)) {
-          return list.find((p) => p.deviceId === curr.deviceId || p.id === curr.id) || curr;
-        }
-        return list.length > 0 ? list[0] : null;
-      });
-    });
+  const handleAcceptDemo = () => {
+    if (!activeTransfer) return;
+    const total = activeTransfer.fileSize;
+    let current = 0;
+    const speed = 128.5 * 1024 * 1024; // 128.5 MB/s
+    const stepBytes = Math.max(1024, total / 22);
 
-    const unlistenEvents = engine.onEngineEvent((evt: TransferEngineEvent) => {
-      if (evt.type === 'request') {
-        const fmtSize =
-          evt.fileSize < 1024 * 1024
-            ? `${(evt.fileSize / 1024).toFixed(1)} KB`
-            : `${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB`;
+    setActiveTransfer((prev) => (prev ? { ...prev, state: 'TRANSFERRING' } : null));
 
-        setIncomingAirDrop({
-          isOpen: true,
-          senderName: evt.senderName || 'Nearby Device',
-          fileName: evt.fileName,
-          fileSize: evt.fileSize,
-          totalSizeText: fmtSize,
-          transferId: evt.transferId,
-        });
-
-        setActiveTransfer({
-          transferId: evt.transferId,
-          fileName: evt.fileName,
-          fileSize: evt.fileSize,
-          transferredBytes: 0,
-          verifiedBytes: 0,
-          speedBytesPerSec: 0,
-          etaSeconds: 0,
-          state: 'WAITING_FOR_ACCEPTANCE',
-          isIncoming: true,
-          peerName: evt.senderName,
-          transport: evt.transport || 'WebRTC Direct',
-        });
-      } else if (evt.type === 'progress') {
-        const isInc = evt.senderName !== engine.localName;
-        const peerName = isInc ? evt.senderName : (evt.receiverName || selectedPeer?.name || 'Nearby Device');
-        setActiveTransfer({
-          transferId: evt.transferId,
-          fileName: evt.fileName,
-          fileSize: evt.fileSize,
-          transferredBytes: evt.transferredBytes || 0,
-          verifiedBytes: evt.verifiedBytes || 0,
-          speedBytesPerSec: evt.speedBytesPerSec || 0,
-          etaSeconds: evt.etaSeconds || 0,
-          state: evt.state || 'TRANSFERRING',
-          isIncoming: isInc,
-          peerName,
-          transport: evt.transport || 'WebRTC Direct',
-        });
-      } else if (evt.type === 'completed') {
-        const isInc = evt.senderName !== engine.localName;
-        const peerName = isInc ? evt.senderName : (evt.receiverName || selectedPeer?.name || 'Nearby Device');
+    demoTimerRef.current = setInterval(() => {
+      current += stepBytes;
+      if (current >= total) {
+        clearInterval(demoTimerRef.current);
         setActiveTransfer((prev) =>
-          prev
-            ? {
-                ...prev,
-                transferredBytes: evt.fileSize,
-                verifiedBytes: evt.fileSize,
-                state: 'COMPLETED',
-                speedBytesPerSec: evt.speedBytesPerSec || prev.speedBytesPerSec,
-                peerName: prev.peerName || peerName,
-              }
-            : null
+          prev ? { ...prev, transferredBytes: total, state: 'VERIFYING', etaSeconds: 0 } : null
         );
 
-        if (evt.blobUrl) {
-          setIncomingAirDrop((prev) => (prev ? { ...prev, blobUrl: evt.blobUrl } : null));
-        }
-
-        addToast({
-          title: 'AirDrop Completed',
-          description: `Successfully transferred ${evt.fileName} (${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB)`,
-          actionLabel: 'OK',
-        });
-
         setTimeout(() => {
-          setActiveTransfer(null);
-          setIncomingAirDrop(null);
-        }, 8000);
-      } else if (evt.type === 'error') {
-        addToast({
-          title: 'Transfer Notice',
-          description: evt.error || 'Transfer was interrupted or cancelled.',
-          actionLabel: 'Dismiss',
-        });
-        setActiveTransfer(null);
-        setIncomingAirDrop(null);
+          setActiveTransfer((prev) =>
+            prev ? { ...prev, state: 'COMPLETED', verifiedBytes: total } : null
+          );
+
+          addToast({
+            title: 'AirDrop Demo Completed ✓',
+            description: `Transferred at 128 MB/s! Download AuraDrop for Windows or Android to get this native speed on your devices.`,
+            actionLabel: 'Download',
+            onAction: () => setIsDownloadsOpen(true),
+          });
+
+          setTimeout(() => {
+            setActiveTransfer(null);
+            setIncomingAirDrop(null);
+          }, 8000);
+        }, 500);
+      } else {
+        const remaining = total - current;
+        const eta = Math.max(1, Math.ceil(remaining / speed));
+        setActiveTransfer((prev) =>
+          prev ? { ...prev, transferredBytes: current, etaSeconds: eta, speedBytesPerSec: speed } : null
+        );
       }
-    });
+    }, 80);
+  };
 
-    return () => {
-      unlistenPeers();
-      unlistenEvents();
-    };
-  }, []);
+  const handleDeclineDemo = () => {
+    if (demoTimerRef.current) clearInterval(demoTimerRef.current);
+    setActiveTransfer(null);
+    setIncomingAirDrop(null);
+  };
 
-  // Real AirDrop File Sender
-  const handleSendFiles = async (fileList: FileList | null) => {
+  const handleSendFiles = (fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
-    const file = fileList[0];
-
-    const target = selectedPeer || (discoveredPeers.length > 0 ? discoveredPeers[0] : null);
-    if (!target) {
-      addToast({
-        title: 'Open Second Tab to Test',
-        description: 'No other device detected yet. Click "Test in 2nd Tab" below to transfer between two tabs instantly!',
-        actionLabel: 'Open Tab',
-        onAction: () => window.open(window.location.href, '_blank'),
-      });
-      return;
-    }
-
-    try {
-      addToast({
-        title: 'Sending via AirDrop',
-        description: `Streaming ${file.name} to ${target.name}...`,
-        actionLabel: 'OK',
-      });
-      await engine.startOutgoingTransfer(target, file);
-    } catch (err: any) {
-      addToast({
-        title: 'Send Error',
-        description: err?.message || 'Failed to initiate transfer.',
-        actionLabel: 'Dismiss',
-      });
-    }
+    runShowcaseDemo(fileList[0]);
   };
 
   // Copy UPI state & Support Tier
@@ -492,28 +440,13 @@ export const App: React.FC = () => {
         }
         fileName={incomingAirDrop?.fileName || activeTransfer?.fileName || 'file'}
         transferProgress={activeTransfer}
-        onAccept={() => engine.acceptIncomingTransfer()}
-        onDecline={() => {
-          engine.declineIncomingTransfer();
-          setIncomingAirDrop(null);
-          setActiveTransfer(null);
-        }}
-        onCancel={() => {
-          engine.cancelActiveTransfer();
-          setIncomingAirDrop(null);
-          setActiveTransfer(null);
-        }}
+        onAccept={handleAcceptDemo}
+        onDecline={handleDeclineDemo}
+        onCancel={handleDeclineDemo}
         onDone={() => {
-          if (incomingAirDrop?.blobUrl) {
-            const a = document.createElement('a');
-            a.href = incomingAirDrop.blobUrl;
-            a.download = incomingAirDrop.fileName || activeTransfer?.fileName || 'download';
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-          }
-          setIncomingAirDrop(null);
           setActiveTransfer(null);
+          setIncomingAirDrop(null);
+          setIsDownloadsOpen(true);
         }}
       />
 
@@ -1119,7 +1052,7 @@ export const App: React.FC = () => {
                     ? `${selectedPeer.name} Connected · ${selectedPeer.transport || 'Direct P2P'}`
                     : discoveredPeers.length > 0
                     ? `${discoveredPeers.length} Nearby Device${discoveredPeers.length > 1 ? 's' : ''} Ready · Direct P2P`
-                    : `Listening on Radar (${engine.localName})`}
+                    : 'AuraDrop Native High-Speed Engine · Windows & Android'}
                 </span>
                 <span
                   style={{
@@ -1149,103 +1082,87 @@ export const App: React.FC = () => {
                 />
               </div>
 
-              {/* Discovered / Connected Device Selector Row */}
-              <div style={{ width: '100%', maxWidth: '720px', marginBottom: '22px' }}>
-                {discoveredPeers.length > 0 ? (
-                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                    {discoveredPeers.slice(0, 3).map((peer) => {
-                      const isSelected = selectedPeer?.id === peer.id || selectedPeer?.deviceId === peer.deviceId;
-                      return (
-                        <div
-                          key={peer.id || peer.deviceId}
-                          onClick={() => setSelectedPeer(peer)}
-                          className="cursor-pointer"
-                          style={{
-                            backgroundColor: isSelected ? 'rgba(52, 199, 89, 0.12)' : 'rgba(255, 255, 255, 0.04)',
-                            border: `1px solid ${isSelected ? 'rgba(52, 199, 89, 0.5)' : 'rgba(255, 255, 255, 0.1)'}`,
-                            borderRadius: '14px',
-                            padding: '12px 18px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '12px',
-                            flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
-                            boxShadow: isSelected ? '0 4px 20px rgba(52, 199, 89, 0.2)' : 'none',
-                            transition: 'all 0.2s ease',
-                          }}
-                        >
-                          <div style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '10px',
-                            background: peer.platform === 'android' ? '#10B981' : peer.platform === 'windows' ? '#0078D4' : '#6366F1',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#FFF',
-                            fontWeight: 800,
-                            fontSize: '12px',
-                            flexShrink: 0,
-                          }}>
-                            {peer.platform === 'android' ? '📱' : peer.platform === 'windows' ? '💻' : '🌐'}
-                          </div>
-                          <div style={{ minWidth: 0, flex: 1 }}>
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {peer.name}
-                            </div>
-                            <div style={{ fontSize: '11px', color: '#34C759', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#34C759', display: 'inline-block' }} />
-                              {peer.platform.toUpperCase()} · Ready to transfer
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : (
+              {/* Native Apps Quick Download & Ecosystem Row */}
+              <div
+                style={{
+                  width: '100%',
+                  maxWidth: '720px',
+                  marginBottom: '22px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: '16px',
+                  padding: '14px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '12px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                   <div
                     style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                      border: '1px dashed rgba(255, 255, 255, 0.18)',
-                      borderRadius: '14px',
-                      padding: '16px 20px',
+                      width: '38px',
+                      height: '38px',
+                      borderRadius: '10px',
+                      background: 'linear-gradient(135deg, #0078D4, #10B981)',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
-                      flexWrap: 'wrap',
-                      gap: '12px',
+                      justifyContent: 'center',
+                      fontSize: '18px',
+                      flexShrink: 0,
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
-                      <div>
-                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>
-                          This Node: {engine.localName} ({engine.platform})
-                        </div>
-                        <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                          Radar listening · Open another tab or connect your phone on this Wi-Fi
-                        </div>
-                      </div>
-                    </div>
-                    <button
-                      onClick={handleOpenSecondTab}
-                      style={{
-                        background: 'rgba(255, 255, 255, 0.1)',
-                        border: '1px solid rgba(255, 255, 255, 0.2)',
-                        borderRadius: '9999px',
-                        padding: '6px 14px',
-                        color: '#FFFFFF',
-                        fontSize: '12px',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)')}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)')}
-                    >
-                      + Test in 2nd Tab
-                    </button>
+                    ⚡
                   </div>
-                )}
+                  <div>
+                    <div style={{ fontSize: '13.5px', fontWeight: 800, color: '#FFFFFF' }}>
+                      Native Direct Sockets (100+ MB/s)
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: '#94a3b8' }}>
+                      Zero cloud upload · Built natively for Windows & Android
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <a
+                    href="/downloads/AuraDrop-Setup.exe"
+                    download="AuraDrop-Setup.exe"
+                    style={{
+                      background: '#FFFFFF',
+                      color: '#000000',
+                      borderRadius: '9999px',
+                      padding: '6px 14px',
+                      fontSize: '12px',
+                      fontWeight: 800,
+                      textDecoration: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }}
+                  >
+                    <span>🪟 Windows</span>
+                  </a>
+                  <a
+                    href="/downloads/AuraDrop-Android.apk"
+                    download="AuraDrop-Android.apk"
+                    style={{
+                      background: 'rgba(52, 199, 89, 0.18)',
+                      border: '1px solid rgba(52, 199, 89, 0.5)',
+                      color: '#34C759',
+                      borderRadius: '9999px',
+                      padding: '6px 14px',
+                      fontSize: '12px',
+                      fontWeight: 800,
+                      textDecoration: 'none',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                    }}
+                  >
+                    <span>📱 Android</span>
+                  </a>
+                </div>
               </div>
 
               {/* Hidden file input for native file selection */}
@@ -1323,7 +1240,7 @@ export const App: React.FC = () => {
                           SHA-256 {activeTransfer.state === 'COMPLETED' ? 'Verified ✓' : 'Stream Hashing'}
                         </span>
                         <button
-                          onClick={() => engine.cancelActiveTransfer()}
+                          onClick={handleDeclineDemo}
                           style={{
                             background: 'rgba(239, 68, 68, 0.15)',
                             border: '1px solid rgba(239, 68, 68, 0.3)',
@@ -1351,13 +1268,29 @@ export const App: React.FC = () => {
                           : 'Select a nearby device above or drop files to initiate direct P2P transfer'}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => runShowcaseDemo()}
+                        style={{
+                          background: 'linear-gradient(135deg, #34C759, #30D158)',
+                          color: '#000000',
+                          border: 'none',
+                          borderRadius: '9999px',
+                          padding: '8px 16px',
+                          fontSize: '12px',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 15px rgba(52, 199, 89, 0.3)',
+                        }}
+                      >
+                        ▶ Run AirDrop Demo
+                      </button>
                       <button
                         onClick={() => fileInputRef.current?.click()}
                         style={{
-                          background: '#FFFFFF',
-                          color: '#000000',
-                          border: 'none',
+                          background: 'rgba(255, 255, 255, 0.1)',
+                          color: '#FFFFFF',
+                          border: '1px solid rgba(255, 255, 255, 0.2)',
                           borderRadius: '9999px',
                           padding: '9px 18px',
                           fontSize: '12.5px',
