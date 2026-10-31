@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 import { Pool, PoolConfig } from 'pg';
-import crypto from 'node:crypto';
+import * as crypto from 'node:crypto';
 
 // AuraDrop Production Serverless Signaling Channel (P2PFS/1 V25 Hardened)
 // Security hardening:
