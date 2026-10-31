@@ -187,7 +187,13 @@ class AuraTransferEngine {
       final prepareResp = await prepareReq.close().timeout(const Duration(seconds: 75));
 
       if (prepareResp.statusCode != HttpStatus.ok) {
-        _errorController.add('Recipient declined or unavailable');
+        try {
+          final errBody = await prepareResp.transform(utf8.decoder).join();
+          final errData = jsonDecode(errBody);
+          _errorController.add(errData['error']?.toString() ?? 'Recipient declined or unavailable (HTTP ${prepareResp.statusCode})');
+        } catch (_) {
+          _errorController.add('Recipient declined or unavailable (HTTP ${prepareResp.statusCode})');
+        }
         return false;
       }
 
@@ -195,7 +201,8 @@ class AuraTransferEngine {
       final prepareData = jsonDecode(prepareBody);
 
       if (prepareData['accepted'] != true) {
-        _errorController.add('Transfer declined by recipient');
+        final reason = prepareData['error']?.toString() ?? 'Transfer declined by recipient';
+        _errorController.add(reason);
         return false;
       }
 

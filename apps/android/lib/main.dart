@@ -422,6 +422,21 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
         });
       });
 
+      AuraLanServer().onChatMessage.listen((msg) {
+        if (!mounted) return;
+        final pId = msg['peerId']?.toString() ?? '';
+        final sName = msg['senderName']?.toString() ?? 'Nearby Peer';
+        final text = msg['text']?.toString() ?? '';
+        InAppNotificationController().showChatMessage(
+          peerId: pId,
+          senderName: sName,
+          text: text,
+          onTap: () {
+            setState(() => _currentTabIndex = 2);
+          },
+        );
+      });
+
 
       // Hook reactive WebRTC & Signaling events
       AuraSignalingService().onPeerList.listen((peers) {

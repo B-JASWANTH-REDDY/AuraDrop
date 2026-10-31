@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HeroGlobe } from './components/HeroGlobe';
 import { DownloadsModal, DiagnosticsModal } from './components/Modals';
-import { LiveStatusPill } from './components/LiveStatusPill';
 import { LegalModal, LegalTab } from './components/LegalModal';
 import { CookieConsentBanner } from './components/CookieConsentBanner';
 import { CommandMenu } from './components/CommandMenu';
@@ -567,12 +566,7 @@ export const App: React.FC = () => {
 
           {/* Right Action Buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-            {/* Live Control & Peer Diagnostics Pill */}
-            <LiveStatusPill
-              peerCount={peers.length}
-              onClick={() => setIsDiagnosticsOpen(true)}
-              isDark={isDark}
-            />
+            
             {/* Quick Find (⌘K) Command Menu Trigger */}
             <button
               onClick={() => setIsCommandMenuOpen(true)}

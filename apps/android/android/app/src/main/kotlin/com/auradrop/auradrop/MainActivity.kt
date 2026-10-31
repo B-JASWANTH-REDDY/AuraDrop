@@ -2353,15 +2353,19 @@ class MainActivity : FlutterActivity() {
                     sendEvent("incomingShareRequest", shareEventMap)
                     sendEvent("transferRequest", shareEventMap)
 
-                    // ALWAYS require explicit user Accept or Decline — no auto-approve.
-                    // Previously trusting a peer means we skip the SAS verification code only,
-                    // NOT the incoming share consent dialog. Any peer can send only if the user taps Accept.
-                    Log.i(TAG, "[AuraTransfer] Awaiting user consent for inbound transfer $xferId from $senderUserId (firstContact=$isFirstContact)")
-                    val accepted = withTimeoutOrNull(60000L) {
-                        decisionDeferred.await()
-                    } ?: run {
-                        Log.w(TAG, "[AuraTransfer] User decision timed out for $xferId — declining automatically")
-                        false
+                    // If sender is already in trusted store, auto-approve seamlessly like AirDrop
+                    val isPeerTrusted = AuraIdentityManager.isPeerTrusted(applicationContext, senderUserId)
+                    val accepted = if (isPeerTrusted && !isFirstContact) {
+                        Log.i(TAG, "[AuraTransfer] Trusted peer $senderUserId — auto-accepting transfer $xferId seamlessly")
+                        true
+                    } else {
+                        Log.i(TAG, "[AuraTransfer] Awaiting user consent for inbound transfer $xferId from $senderUserId (firstContact=$isFirstContact)")
+                        withTimeoutOrNull(60000L) {
+                            decisionDeferred.await()
+                        } ?: run {
+                            Log.w(TAG, "[AuraTransfer] User decision timed out for $xferId — declining automatically")
+                            false
+                        }
                     }
                     pendingHttpDecisions.remove(xferId)
                     if (accepted) {

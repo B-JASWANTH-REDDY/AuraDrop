@@ -62,6 +62,9 @@ class AuraLanServer {
   final _localSignalController = StreamController<Map<String, dynamic>>.broadcast();
   final _localPeerConnectedController = StreamController<Map<String, dynamic>>.broadcast();
   final _localPeerDisconnectedController = StreamController<String>.broadcast();
+  final _chatController = StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<Map<String, dynamic>> get onChatMessage => _chatController.stream;
 
   Stream<AuraLanServerProgress> get onTransferProgress => _progressController.stream;
   Stream<Map<String, dynamic>> get onTransferComplete => _completeController.stream;

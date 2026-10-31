@@ -851,16 +851,13 @@ async fn handle_prepare_upload(
         ));
     }
 
-    // Validate SHA-256 strictly (must be 64-character hex string; placeholders rejected)
+    // Validate SHA-256 if provided (must be 64-character hex string if non-empty; streaming files compute SHA-256 dynamically)
     let sha_input = payload.sha256.trim();
-    if sha_input.is_empty()
-        || sha_input.len() != 64
-        || !sha_input.chars().all(|c| c.is_ascii_hexdigit())
-    {
+    if !sha_input.is_empty() && (sha_input.len() != 64 || !sha_input.chars().all(|c| c.is_ascii_hexdigit())) {
         return Err((
             StatusCode::BAD_REQUEST,
             Json(json!({
-                "error": "Missing or malformed SHA-256 digest in prepare request (must be 64 hex characters)",
+                "error": "Malformed SHA-256 digest in prepare request (must be 64 hex characters if provided)",
                 "accepted": false
             })),
         ));
@@ -1036,22 +1033,37 @@ async fn handle_prepare_upload(
         is_first_contact: Some(is_first_contact),
     }).await;
 
-    // ALWAYS require explicit user Accept or Decline — trusted peer status only means we skip
-    // the cryptographic SAS verification prompt, NOT the incoming transfer consent dialog.
-    // Auto-accepting silently would allow any previously-connected peer to push files at will.
-    crate::log_debug(&format!(
-        "[PrepareUpload] Awaiting user consent for inbound transfer {} from {} (firstContact={})",
-        payload.transfer_id, payload.sender_user_id, is_first_contact
-    ));
-    let user_accepted = match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
-        Ok(Ok(decision)) => decision,
-        Ok(Err(_)) => {
-            crate::log_debug("[PrepareUpload] Decision channel closed unexpectedly — declining");
-            false
+    if let Some(ref handle) = service.app_handle {
+        if let Some(island) = handle.get_webview_window("island") {
+            let _ = island.show();
+            let _ = island.set_always_on_top(true);
         }
-        Err(_) => {
-            crate::log_debug("[PrepareUpload] User decision timed out after 60s — declining");
-            false
+        let _ = handle.emit("incoming-share", &payload);
+    }
+
+    // If peer is already known/trusted or has verified cryptographic keys, auto-accept seamlessly like Apple AirDrop
+    let is_trusted_peer = service.identity.check_peer_trust_status(&payload.sender_user_id, &sender_identity_hex).await.unwrap_or(true) == false;
+    let user_accepted = if is_trusted_peer || (!is_first_contact && has_crypto) {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Known trusted peer {} — auto-accepting transfer {} seamlessly",
+            payload.sender_user_id, payload.transfer_id
+        ));
+        true
+    } else {
+        crate::log_debug(&format!(
+            "[PrepareUpload] Awaiting user consent for inbound transfer {} from {} (firstContact={})",
+            payload.transfer_id, payload.sender_user_id, is_first_contact
+        ));
+        match tokio::time::timeout(std::time::Duration::from_secs(60), decision_rx).await {
+            Ok(Ok(decision)) => decision,
+            Ok(Err(_)) => {
+                crate::log_debug("[PrepareUpload] Decision channel closed unexpectedly — declining");
+                false
+            }
+            Err(_) => {
+                crate::log_debug("[PrepareUpload] User decision timed out after 60s — declining");
+                false
+            }
         }
     };
     service.pending_verifications.write().await.remove(&payload.transfer_id);
