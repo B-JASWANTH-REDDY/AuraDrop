@@ -11,6 +11,7 @@ import 'components/minimal_components.dart';
 import 'components/aura_data_stream.dart';
 import 'components/aura_completion_burst.dart';
 import 'components/notification_host.dart';
+import 'components/aura_mobile_island.dart';
 import 'services/native_bridge.dart';
 import 'screens/transfers_screen.dart';
 import 'screens/chat_screen.dart';
@@ -1256,6 +1257,7 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
             children: [
               Column(
                 children: [
+                  const SizedBox(height: 42),
                   _buildHeader(theme),
                   Expanded(
                     child: IndexedStack(
@@ -1321,6 +1323,35 @@ class _AuraDropHomeScreenState extends State<AuraDropHomeScreen>
                    _transferState == TransferState.completed ||
                    _transferState == TransferState.failed))
                 _buildTransferOverlay(theme),
+              // Always-Active Floating Dynamic Island for Android
+              Positioned(
+                top: 4,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: AuraMobileIsland(
+                    peers: _peers.values.toList(),
+                    transferState: _transferState,
+                    activeFileName: _activeFileName,
+                    transferredBytes: _transferredBytes,
+                    totalTransferBytes: _totalTransferBytes,
+                    speedBytesPerSec: _speedBytesPerSec,
+                    etaSeconds: _etaSeconds,
+                    isSender: _isSender,
+                    onSendFilesToPeer: _sendFilesToPeer,
+                    onCancelTransfer: _cancelTransfer,
+                    onOpenChatWithPeer: (peer) {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => ChatScreen(peer: peer)),
+                      );
+                    },
+                    onRescan: () {
+                      AuraDiscoveryService().triggerScan();
+                    },
+                  ),
+                ),
+              ),
             ],
           ),
         ),

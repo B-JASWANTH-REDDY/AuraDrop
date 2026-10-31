@@ -128,6 +128,8 @@ class AuraDiscoveryService {
     _scanSubnet();
   }
 
+  void triggerScan() => forceAnnounce();
+
   Future<List<Map<String, String>>> _getPhysicalBroadcastTargets() async {
     final targets = <Map<String, String>>[];
     final virtualKeywords = [

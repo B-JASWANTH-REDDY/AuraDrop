@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useReducer, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import type { PeerDevice, TransferProgressPayload } from '../types';
+import type { PeerDevice, TransferProgressPayload, SelectedFileInfo } from '../types';
 import logoImg from '../assets/logo.png';
 
 type IslandPhase =
@@ -27,6 +27,7 @@ interface IslandState {
   expanded: boolean;
   peerCount: number;
   peerName: string;
+  peers: PeerDevice[];
   fileName: string;
   filePath: string;
   fileSizeBytes: number;
@@ -43,7 +44,7 @@ interface IslandState {
 }
 
 type IslandAction =
-  | { type: 'PEERS_UPDATED'; peerCount: number; peerName: string }
+  | { type: 'PEERS_UPDATED'; peers: PeerDevice[] }
   | { type: 'TRANSFER_REQUEST'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_START'; payload: Partial<TransferProgressPayload> }
   | { type: 'TRANSFER_PROGRESS'; payload: Partial<TransferProgressPayload> }
@@ -61,6 +62,7 @@ const initialState: IslandState = {
   expanded: false,
   peerCount: 0,
   peerName: '',
+  peers: [],
   fileName: '',
   filePath: '',
   fileSizeBytes: 0,
@@ -79,17 +81,21 @@ const initialState: IslandState = {
 function islandReducer(state: IslandState, action: IslandAction): IslandState {
   switch (action.type) {
     case 'PEERS_UPDATED': {
+      const peers = action.peers || [];
+      const peerCount = peers.length;
+      const peerName = peers[0]?.name || '';
       if (['transferring', 'waiting_approval'].includes(state.phase)) {
-        return { ...state, peerCount: action.peerCount, peerName: action.peerName || state.peerName };
+        return { ...state, peers, peerCount, peerName: peerName || state.peerName };
       }
-      const isNew = action.peerCount > 0 && (state.peerCount === 0 || (action.peerName && action.peerName !== state.peerName));
-      const phase: IslandPhase = action.peerCount > 0 ? 'discovering' : 'idle';
+      const isNew = peerCount > 0 && (state.peerCount === 0 || (peerName && peerName !== state.peerName));
+      const phase: IslandPhase = peerCount > 0 ? 'discovering' : 'idle';
       return {
         ...state,
+        peers,
         phase,
         expanded: isNew ? true : state.expanded,
-        peerCount: action.peerCount,
-        peerName: action.peerName || state.peerName,
+        peerCount,
+        peerName: peerName || state.peerName,
       };
     }
 
@@ -307,8 +313,8 @@ export const DesktopIsland: React.FC<{
     // 1. Initial peers probe
     invoke<PeerDevice[]>('get_nearby_peers')
       .then((peers) => {
-        if (peers && peers.length > 0) {
-          dispatch({ type: 'PEERS_UPDATED', peerCount: peers.length, peerName: peers[0]?.name ?? '' });
+        if (peers) {
+          dispatch({ type: 'PEERS_UPDATED', peers });
         }
       })
       .catch(() => {});
@@ -321,8 +327,7 @@ export const DesktopIsland: React.FC<{
         const peers = e.payload || [];
         dispatch({
           type: 'PEERS_UPDATED',
-          peerCount: peers.length,
-          peerName: peers[0]?.name ?? '',
+          peers,
         });
       })
     );
@@ -406,6 +411,57 @@ export const DesktopIsland: React.FC<{
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+
+  // Send files directly to chosen peer over high-speed LAN
+  const handleShareWithPeer = async (peer: PeerDevice, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      const files = await invoke<SelectedFileInfo[]>('pick_files');
+      if (files && files.length > 0) {
+        const paths = files.map((f) => f.path);
+        await invoke('send_files_to_peer', {
+          peerId: peer.id,
+          filePaths: paths,
+        });
+        const totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0);
+        dispatch({
+          type: 'TRANSFER_START',
+          payload: {
+            fileName: files.length === 1 ? files[0].name : `${files.length} files`,
+            fileSize: totalBytes,
+            peerName: peer.name,
+            isIncoming: false,
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to pick and send files:', err);
+    }
+  };
+
+  // Open direct chat with peer
+  const handleChatWithPeer = (peer: PeerDevice, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (onOpenChat) {
+      onOpenChat(peer.id);
+    } else {
+      invoke('open_chat_window', { peerId: peer.id }).catch(() => onOpenMain());
+    }
+    dispatch({ type: 'DISMISS' });
+  };
+
+  // Rescan network
+  const handleRescan = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      const fresh = await invoke<PeerDevice[]>('rescan_network');
+      if (fresh) {
+        dispatch({ type: 'PEERS_UPDATED', peers: fresh });
+      }
+    } catch (err) {
+      console.warn('Rescan error:', err);
+    }
+  };
 
   // Accept incoming transfer
   const handleAccept = async (e: React.MouseEvent) => {
@@ -727,6 +783,176 @@ export const DesktopIsland: React.FC<{
               {state.fileName ? state.fileName.split('.').pop()?.slice(0, 4) || 'FILE' : 'P2P'}
             </div>
           </div>
+
+          {/* Nearby Discovered Members Section (Live peer cards with instant Share and Chat) */}
+          {(state.phase === 'discovering' || state.phase === 'idle') && (
+            <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: 11.5, fontWeight: 700, color: '#A1A1AA', letterSpacing: 0.4 }}>
+                  NEARBY DEVICES ({state.peers.length})
+                </span>
+                <button
+                  onClick={handleRescan}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#38BDF8',
+                    fontSize: 11.5,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    padding: '2px 4px',
+                  }}
+                >
+                  ↻ Rescan
+                </button>
+              </div>
+
+              {state.peers.length === 0 ? (
+                <div
+                  style={{
+                    padding: '16px 12px',
+                    borderRadius: 14,
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px dashed rgba(255, 255, 255, 0.14)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: 6,
+                    textAlign: 'center',
+                  }}
+                >
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#A78BFA', animation: 'island-pulse 1.4s infinite' }} />
+                  <span style={{ fontSize: 12.5, color: '#E4E4E7', fontWeight: 600 }}>
+                    Searching for nearby devices...
+                  </span>
+                  <span style={{ fontSize: 11, color: '#A1A1AA' }}>
+                    Open AuraDrop on Android, Mac, or PC on the same Wi-Fi
+                  </span>
+                </div>
+              ) : (
+                <div
+                  style={{
+                    maxHeight: 200,
+                    overflowY: 'auto',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    paddingRight: 2,
+                  }}
+                >
+                  {state.peers.map((peer) => {
+                    const platform = (peer.platform || '').toLowerCase();
+                    const osIcon = platform.includes('win')
+                      ? '🪟'
+                      : platform.includes('android')
+                      ? '🤖'
+                      : platform.includes('mac') || platform.includes('ios') || platform.includes('apple')
+                      ? '🍏'
+                      : platform.includes('linux')
+                      ? '🐧'
+                      : '📱';
+
+                    return (
+                      <div
+                        key={peer.id}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '8px 12px',
+                          borderRadius: 14,
+                          background: 'rgba(255, 255, 255, 0.06)',
+                          border: '1px solid rgba(255, 255, 255, 0.08)',
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                          <div
+                            style={{
+                              width: 32,
+                              height: 32,
+                              borderRadius: 10,
+                              background: '#242426',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontSize: 16,
+                              flexShrink: 0,
+                            }}
+                          >
+                            {osIcon}
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div
+                              style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: '#FFFFFF',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {peer.name || 'Nearby Device'}
+                            </div>
+                            <div style={{ fontSize: 10.5, color: '#9CA3AF', marginTop: 1 }}>
+                              {peer.ip ? `${peer.ip} • Ready` : 'Direct LAN'}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Direct action buttons: Share and Chat */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          <button
+                            onClick={(e) => handleShareWithPeer(peer, e)}
+                            title={`Send files to ${peer.name}`}
+                            style={{
+                              padding: '5px 11px',
+                              borderRadius: 9999,
+                              background: '#007AFF',
+                              border: 'none',
+                              color: '#FFFFFF',
+                              fontSize: 11.5,
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              boxShadow: '0 2px 8px rgba(0, 122, 255, 0.35)',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <span>📎</span>
+                            <span>Share</span>
+                          </button>
+                          <button
+                            onClick={(e) => handleChatWithPeer(peer, e)}
+                            title={`Chat with ${peer.name}`}
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: 9999,
+                              background: 'rgba(255, 255, 255, 0.1)',
+                              border: '1px solid rgba(255, 255, 255, 0.12)',
+                              color: '#FFFFFF',
+                              fontSize: 11.5,
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>💬</span>
+                            <span>Chat</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Middle: Transfer Progress Bar (when transferring or verifying) */}
           {(state.phase === 'transferring' || state.phase === 'verifying') && (
