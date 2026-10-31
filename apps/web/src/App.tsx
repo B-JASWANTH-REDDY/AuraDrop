@@ -63,9 +63,42 @@ const TiltCard: React.FC<{
 };
 
 const DEMO_PEERS: PeerDevice[] = [
-  { id: 'demo-1', name: 'Pixel 9 Pro', platform: 'android', connectionState: 'READY_TO_TRANSFER', ip: '192.168.1.12' },
-  { id: 'demo-2', name: 'Surface Studio', platform: 'windows', connectionState: 'CONNECTED', ip: '192.168.1.15' },
-  { id: 'demo-3', name: 'Chrome on macOS', platform: 'web', connectionState: 'CONNECTED', ip: '192.168.1.24' },
+  {
+    id: 'demo-1',
+    deviceId: 'demo-1',
+    name: 'Pixel 9 Pro',
+    deviceName: 'Pixel 9 Pro',
+    platform: 'android',
+    connectionState: 'READY_TO_TRANSFER',
+    ip: '192.168.1.12',
+    port: 51820,
+    lastSeen: new Date(),
+    transport: 'Native LAN Turbo (124+ MB/s)',
+  },
+  {
+    id: 'demo-2',
+    deviceId: 'demo-2',
+    name: 'Surface Studio',
+    deviceName: 'Surface Studio',
+    platform: 'windows',
+    connectionState: 'READY_TO_TRANSFER',
+    ip: '192.168.1.15',
+    port: 51820,
+    lastSeen: new Date(),
+    transport: 'Direct High-Speed P2P',
+  },
+  {
+    id: 'demo-3',
+    deviceId: 'demo-3',
+    name: 'MacBook Pro M3',
+    deviceName: 'MacBook Pro M3',
+    platform: 'macos',
+    connectionState: 'READY_TO_TRANSFER',
+    ip: '192.168.1.24',
+    port: 51820,
+    lastSeen: new Date(),
+    transport: 'Direct High-Speed P2P',
+  },
 ];
 
 export const App: React.FC = () => {
@@ -536,7 +569,7 @@ export const App: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
             {/* Live Control & Peer Diagnostics Pill */}
             <LiveStatusPill
-              peerCount={discoveredPeers.length}
+              peerCount={peers.length}
               onClick={() => setIsDiagnosticsOpen(true)}
               isDark={isDark}
             />
@@ -1050,8 +1083,8 @@ export const App: React.FC = () => {
                     ? `${activeTransfer.isIncoming ? 'Receiving from' : 'Sending to'} ${activeTransfer.peerName}: ${activeTransfer.fileName}`
                     : selectedPeer
                     ? `${selectedPeer.name} Connected · ${selectedPeer.transport || 'Direct P2P'}`
-                    : discoveredPeers.length > 0
-                    ? `${discoveredPeers.length} Nearby Device${discoveredPeers.length > 1 ? 's' : ''} Ready · Direct P2P`
+                    : peers.length > 0
+                    ? `${peers.length} Nearby Demo Devices · Native High-Speed P2P`
                     : 'AuraDrop Native High-Speed Engine · Windows & Android'}
                 </span>
                 <span
@@ -1305,7 +1338,7 @@ export const App: React.FC = () => {
                         ⚡ Send File via AirDrop
                       </button>
                       <button
-                        onClick={handleOpenSecondTab}
+                        onClick={() => setIsDownloadsOpen(true)}
                         style={{
                           background: 'rgba(255, 255, 255, 0.08)',
                           color: '#FFFFFF',
@@ -1318,7 +1351,7 @@ export const App: React.FC = () => {
                           transition: 'all 0.2s ease',
                         }}
                       >
-                        Test in 2nd Tab
+                        📥 Get Native Apps
                       </button>
                     </div>
                   </div>

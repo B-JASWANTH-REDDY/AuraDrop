@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "buildCommand": "pnpm run build",
+  "buildCommand": "pnpm --filter @auradrop/web build && node scripts/copy-web-dist.js",
   "outputDirectory": "public",
   "cleanUrls": true,
   "headers": [
@@ -100,6 +100,10 @@
     {
       "source": "/sitemap.xml",
       "destination": "/sitemap.xml"
+    },
+    {
+      "source": "/assets/:path*",
+      "destination": "/assets/:path*"
     },
     {
       "source": "/(.*)",
