@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { TransferEngine } from '../engine/transferEngine';
 
 interface LiveStatusPillProps {
   peerCount: number;
@@ -26,24 +27,46 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
             setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
           }
         } else {
-          if (isMounted) setIsOnline(false);
+          try {
+            const diag = TransferEngine.getInstance().getSignalingDiagnostics();
+            if (diag.wsState === 'OPEN') {
+              if (isMounted) {
+                setIsOnline(true);
+                setLatency(null);
+                setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+              }
+              return;
+            }
+          } catch {}
+          if (isMounted) {
+            setIsOnline(false);
+            setLatency(null);
+          }
         }
       } catch {
+        let meshOnline = false;
+        try {
+          const diag = TransferEngine.getInstance().getSignalingDiagnostics();
+          if (diag.wsState === 'OPEN' || diag.connectedPeersCount > 0 || peerCount > 0) {
+            meshOnline = true;
+          }
+        } catch {}
+
         if (isMounted) {
-          setLatency(Math.floor(12 + Math.random() * 15));
-          setIsOnline(true);
+          setIsOnline(meshOnline);
+          setLatency(null);
           setLastChecked(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
         }
       }
     };
 
     checkHealth();
-    const interval = setInterval(checkHealth, 25000);
+    const interval = setInterval(checkHealth, 15000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [peerCount]);
 
   return (
     <div
@@ -58,9 +81,9 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
         gap: '7px',
         padding: '5px 11px',
         borderRadius: '9999px',
-        background: isDark ? 'rgba(34, 197, 94, 0.12)' : 'rgba(34, 197, 94, 0.1)',
-        border: `1px solid ${isDark ? 'rgba(34, 197, 94, 0.28)' : 'rgba(34, 197, 94, 0.3)'}`,
-        color: isDark ? '#4ade80' : '#15803d',
+        background: isDark ? (isOnline ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)') : (isOnline ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)'),
+        border: `1px solid ${isDark ? (isOnline ? 'rgba(34, 197, 94, 0.28)' : 'rgba(239, 68, 68, 0.28)') : (isOnline ? 'rgba(34, 197, 94, 0.3)' : 'rgba(239, 68, 68, 0.3)')}`,
+        color: isDark ? (isOnline ? '#4ade80' : '#f87171') : (isOnline ? '#15803d' : '#b91c1c'),
         fontSize: '11.5px',
         fontWeight: 700,
         whiteSpace: 'nowrap',
@@ -75,12 +98,12 @@ export const LiveStatusPill: React.FC<LiveStatusPillProps> = ({ peerCount, onCli
           borderRadius: '50%',
           backgroundColor: isOnline ? '#22c55e' : '#ef4444',
           boxShadow: isOnline ? '0 0 6px #22c55e' : 'none',
-          animation: 'pulseDot 2s infinite ease-in-out',
+          animation: isOnline ? 'pulseDot 2s infinite ease-in-out' : 'none',
           flexShrink: 0,
         }}
       />
-      <span>Live Control</span>
-      {latency !== null && (
+      <span>{isOnline ? 'Live Control' : 'Offline'}</span>
+      {isOnline && latency !== null && (
         <span
           className="tabular-nums"
           style={{

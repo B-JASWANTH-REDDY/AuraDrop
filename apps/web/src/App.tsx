@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { HeroGlobe } from './components/HeroGlobe';
-import { DownloadsModal } from './components/Modals';
+import { DownloadsModal, DiagnosticsModal } from './components/Modals';
+import { LiveStatusPill } from './components/LiveStatusPill';
 import { LegalModal, LegalTab } from './components/LegalModal';
 import { CookieConsentBanner } from './components/CookieConsentBanner';
 import { CommandMenu } from './components/CommandMenu';
 import { ToastNotification, ToastMessage } from './components/ToastNotification';
+import { AirDropNotification } from './components/AirDropNotification';
+import { TransferEngine, TransferEngineEvent } from './engine/transferEngine';
 import { analytics } from './engine/analytics';
-import { PeerDevice } from './types';
+import { PeerDevice, TransferProgress } from './types';
 
 // React Bits Suite
 import BorderGlow from './components/reactbits/BorderGlow';
@@ -81,9 +84,167 @@ export const App: React.FC = () => {
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   const isDark = theme === 'dark';
 
-  // Discovered Peers for Interactive Showcase Demo
-  const [peers] = useState<PeerDevice[]>(DEMO_PEERS);
-  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(DEMO_PEERS[0]);
+  // Real Production Transfer Engine Instance
+  const engine = TransferEngine.getInstance();
+  const [discoveredPeers, setDiscoveredPeers] = useState<PeerDevice[]>([]);
+  const peers = discoveredPeers.length > 0 ? discoveredPeers : DEMO_PEERS;
+  const [selectedPeer, setSelectedPeer] = useState<PeerDevice | null>(null);
+
+  // Active AirDrop Transfer Progress
+  const [activeTransfer, setActiveTransfer] = useState<TransferProgress | null>(null);
+  const [incomingAirDrop, setIncomingAirDrop] = useState<{
+    isOpen: boolean;
+    senderName: string;
+    fileName: string;
+    fileSize: number;
+    totalSizeText: string;
+    transferId: string;
+    blobUrl?: string;
+  } | null>(null);
+
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Open Second Tab Helper
+  const handleOpenSecondTab = () => {
+    window.open(window.location.href, '_blank');
+  };
+
+  // Subscribe to real TransferEngine peers & lifecycle events
+  useEffect(() => {
+    const unlistenPeers = engine.onPeersUpdated((list) => {
+      setDiscoveredPeers(list);
+      setSelectedPeer((curr) => {
+        if (curr && list.some((p) => p.deviceId === curr.deviceId || p.id === curr.id)) {
+          return list.find((p) => p.deviceId === curr.deviceId || p.id === curr.id) || curr;
+        }
+        return list.length > 0 ? list[0] : null;
+      });
+    });
+
+    const unlistenEvents = engine.onEngineEvent((evt: TransferEngineEvent) => {
+      if (evt.type === 'request') {
+        const fmtSize =
+          evt.fileSize < 1024 * 1024
+            ? `${(evt.fileSize / 1024).toFixed(1)} KB`
+            : `${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB`;
+
+        setIncomingAirDrop({
+          isOpen: true,
+          senderName: evt.senderName || 'Nearby Device',
+          fileName: evt.fileName,
+          fileSize: evt.fileSize,
+          totalSizeText: fmtSize,
+          transferId: evt.transferId,
+        });
+
+        setActiveTransfer({
+          transferId: evt.transferId,
+          fileName: evt.fileName,
+          fileSize: evt.fileSize,
+          transferredBytes: 0,
+          verifiedBytes: 0,
+          speedBytesPerSec: 0,
+          etaSeconds: 0,
+          state: 'WAITING_FOR_ACCEPTANCE',
+          isIncoming: true,
+          peerName: evt.senderName,
+          transport: evt.transport || 'WebRTC Direct',
+        });
+      } else if (evt.type === 'progress') {
+        const isInc = evt.senderName !== engine.localName;
+        const peerName = isInc ? evt.senderName : (evt.receiverName || selectedPeer?.name || 'Nearby Device');
+        setActiveTransfer({
+          transferId: evt.transferId,
+          fileName: evt.fileName,
+          fileSize: evt.fileSize,
+          transferredBytes: evt.transferredBytes || 0,
+          verifiedBytes: evt.verifiedBytes || 0,
+          speedBytesPerSec: evt.speedBytesPerSec || 0,
+          etaSeconds: evt.etaSeconds || 0,
+          state: evt.state || 'TRANSFERRING',
+          isIncoming: isInc,
+          peerName,
+          transport: evt.transport || 'WebRTC Direct',
+        });
+      } else if (evt.type === 'completed') {
+        const isInc = evt.senderName !== engine.localName;
+        const peerName = isInc ? evt.senderName : (evt.receiverName || selectedPeer?.name || 'Nearby Device');
+        setActiveTransfer((prev) =>
+          prev
+            ? {
+                ...prev,
+                transferredBytes: evt.fileSize,
+                verifiedBytes: evt.fileSize,
+                state: 'COMPLETED',
+                speedBytesPerSec: evt.speedBytesPerSec || prev.speedBytesPerSec,
+                peerName: prev.peerName || peerName,
+              }
+            : null
+        );
+
+        if (evt.blobUrl) {
+          setIncomingAirDrop((prev) => (prev ? { ...prev, blobUrl: evt.blobUrl } : null));
+        }
+
+        addToast({
+          title: 'AirDrop Completed',
+          description: `Successfully transferred ${evt.fileName} (${(evt.fileSize / (1024 * 1024)).toFixed(1)} MB)`,
+          actionLabel: 'OK',
+        });
+
+        setTimeout(() => {
+          setActiveTransfer(null);
+          setIncomingAirDrop(null);
+        }, 8000);
+      } else if (evt.type === 'error') {
+        addToast({
+          title: 'Transfer Notice',
+          description: evt.error || 'Transfer was interrupted or cancelled.',
+          actionLabel: 'Dismiss',
+        });
+        setActiveTransfer(null);
+        setIncomingAirDrop(null);
+      }
+    });
+
+    return () => {
+      unlistenPeers();
+      unlistenEvents();
+    };
+  }, []);
+
+  // Real AirDrop File Sender
+  const handleSendFiles = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const file = fileList[0];
+
+    const target = selectedPeer || (discoveredPeers.length > 0 ? discoveredPeers[0] : null);
+    if (!target) {
+      addToast({
+        title: 'Open Second Tab to Test',
+        description: 'No other device detected yet. Click "Test in 2nd Tab" below to transfer between two tabs instantly!',
+        actionLabel: 'Open Tab',
+        onAction: () => window.open(window.location.href, '_blank'),
+      });
+      return;
+    }
+
+    try {
+      addToast({
+        title: 'Sending via AirDrop',
+        description: `Streaming ${file.name} to ${target.name}...`,
+        actionLabel: 'OK',
+      });
+      await engine.startOutgoingTransfer(target, file);
+    } catch (err: any) {
+      addToast({
+        title: 'Send Error',
+        description: err?.message || 'Failed to initiate transfer.',
+        actionLabel: 'Dismiss',
+      });
+    }
+  };
 
   // Copy UPI state & Support Tier
   const [copiedUpi, setCopiedUpi] = useState(false);
@@ -92,6 +253,7 @@ export const App: React.FC = () => {
 
   // Modals
   const [isDownloadsOpen, setIsDownloadsOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isLegalOpen, setIsLegalOpen] = useState(false);
   const [legalTab, setLegalTab] = useState<LegalTab>('privacy');
   const [isCommandMenuOpen, setIsCommandMenuOpen] = useState(false);
@@ -176,7 +338,7 @@ export const App: React.FC = () => {
 
   // Handle SlideCommit success
   const handleSlideCommit = () => {
-    const msg = `Thank you for supporting AuraDrop with ₹${selectedTier}!`;
+    const msg = `Thank you for supporting AuraDrop with â‚¹${selectedTier}!`;
     setSupportNotice(msg);
     addToast({
       title: 'Support Tier Selected',
@@ -311,9 +473,53 @@ export const App: React.FC = () => {
         }
       `}</style>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* ── Real Apple Dynamic Island Proximity Card (Incoming & Outgoing) ── */}
+      <AirDropNotification
+        isOpen={Boolean(incomingAirDrop?.isOpen || activeTransfer)}
+        isIncoming={incomingAirDrop?.isOpen ? true : (activeTransfer ? activeTransfer.isIncoming : true)}
+        peerName={
+          incomingAirDrop?.senderName ||
+          (activeTransfer?.isIncoming ? activeTransfer.peerName : activeTransfer?.peerName || selectedPeer?.name || 'Nearby Device')
+        }
+        filesCount={1}
+        totalSizeText={
+          incomingAirDrop?.totalSizeText ||
+          (activeTransfer
+            ? activeTransfer.fileSize < 1024 * 1024
+              ? `${(activeTransfer.fileSize / 1024).toFixed(1)} KB`
+              : `${(activeTransfer.fileSize / (1024 * 1024)).toFixed(1)} MB`
+            : '0 MB')
+        }
+        fileName={incomingAirDrop?.fileName || activeTransfer?.fileName || 'file'}
+        transferProgress={activeTransfer}
+        onAccept={() => engine.acceptIncomingTransfer()}
+        onDecline={() => {
+          engine.declineIncomingTransfer();
+          setIncomingAirDrop(null);
+          setActiveTransfer(null);
+        }}
+        onCancel={() => {
+          engine.cancelActiveTransfer();
+          setIncomingAirDrop(null);
+          setActiveTransfer(null);
+        }}
+        onDone={() => {
+          if (incomingAirDrop?.blobUrl) {
+            const a = document.createElement('a');
+            a.href = incomingAirDrop.blobUrl;
+            a.download = incomingAirDrop.fileName || activeTransfer?.fileName || 'download';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+          setIncomingAirDrop(null);
+          setActiveTransfer(null);
+        }}
+      />
+
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            TOP NAVIGATION BAR (Real Links, Clean Logo, Light/Dark Switcher)
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <header
         style={{
           position: 'sticky',
@@ -395,11 +601,17 @@ export const App: React.FC = () => {
 
           {/* Right Action Buttons */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            {/* Live Control & Peer Diagnostics Pill */}
+            <LiveStatusPill
+              peerCount={discoveredPeers.length}
+              onClick={() => setIsDiagnosticsOpen(true)}
+              isDark={isDark}
+            />
             {/* Quick Find (⌘K) Command Menu Trigger */}
             <button
               onClick={() => setIsCommandMenuOpen(true)}
               className="desktop-btn cursor-pointer"
-              title="Search & Commands (⌘K / Ctrl+K)"
+              title="Search & Commands (âŒ˜K / Ctrl+K)"
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -417,7 +629,7 @@ export const App: React.FC = () => {
             >
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <span>Quick Find</span>
-              <kbd style={{ fontSize: '10px', background: isDark ? '#1a1a20' : '#e2e8f0', padding: '1px 5px', borderRadius: '4px', border: `1px solid ${borderSubtle}` }}>⌘K</kbd>
+              <kbd style={{ fontSize: '10px', background: isDark ? '#1a1a20' : '#e2e8f0', padding: '1px 5px', borderRadius: '4px', border: `1px solid ${borderSubtle}` }}>âŒ˜K</kbd>
             </button>
             {/* Light / Dark Mode Toggle Selector */}
             <button
@@ -615,9 +827,9 @@ export const App: React.FC = () => {
         )}
       </header>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            HERO SECTION (Bold Visible Logo Squircle, Perfectly Aligned Typography)
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <section
         id="about"
         style={{
@@ -675,7 +887,7 @@ export const App: React.FC = () => {
                 }}
               >
                 <span style={{ width: '7px', height: '7px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block', boxShadow: '0 0 8px #22c55e' }} />
-                <span>AuraDrop Showcase · Production v2.0.1</span>
+                <span>AuraDrop Showcase Â· Production v2.0.1</span>
               </div>
               <span
                 style={{
@@ -691,7 +903,7 @@ export const App: React.FC = () => {
                   color: textMuted,
                 }}
               >
-                <span>Zero Cloud Relay · Direct LAN Speed</span>
+                <span>Zero Cloud Relay Â· Direct LAN Speed</span>
               </span>
             </div>
 
@@ -766,7 +978,7 @@ export const App: React.FC = () => {
                 onClick={scrollToPreview}
                 className="hero-subtle-btn cursor-pointer"
               >
-                <span>Live Interactive Demo ↓</span>
+                <span>Live Interactive Demo â†“</span>
               </button>
             </div>
           </AnimatedContent>
@@ -817,7 +1029,7 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* ── Desktop Live App Showcase (Static Viewing Card, Not Movable) ── */}
+          {/* â”€â”€ Desktop Live App Showcase (Static Viewing Card, Not Movable) â”€â”€ */}
           <div
             ref={windowPreviewRef}
             style={{
@@ -853,7 +1065,7 @@ export const App: React.FC = () => {
                 <div style={{ width: '11px', height: '11px', borderRadius: '50%', backgroundColor: '#27C93F' }} />
               </div>
               <div style={{ fontSize: '12px', fontWeight: 600, color: 'rgba(255, 255, 255, 0.7)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: windowWidth < 640 ? '160px' : 'none', textAlign: 'center' }}>
-                {windowWidth < 640 ? 'AuraDrop Demo' : 'AuraDrop Desktop · Dynamic Island & Proximity Radar Demo'}
+                {windowWidth < 640 ? 'AuraDrop Demo' : 'AuraDrop Desktop Â· Dynamic Island & Proximity Radar Demo'}
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: 'rgba(255, 255, 255, 0.45)', flexShrink: 0 }}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -875,17 +1087,18 @@ export const App: React.FC = () => {
               <div
                 style={{
                   backgroundColor: 'rgba(24, 24, 32, 0.95)',
-                  border: '1px solid rgba(255, 255, 255, 0.14)',
+                  border: activeTransfer ? '1px solid rgba(52, 199, 89, 0.45)' : '1px solid rgba(255, 255, 255, 0.14)',
                   borderRadius: '9999px',
                   padding: windowWidth < 480 ? '7px 14px' : '9px 20px',
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '10px',
-                  boxShadow: '0 12px 35px rgba(0, 0, 0, 0.75)',
+                  boxShadow: activeTransfer ? '0 12px 35px rgba(52, 199, 89, 0.25)' : '0 12px 35px rgba(0, 0, 0, 0.75)',
                   marginBottom: '26px',
                   maxWidth: '100%',
                   flexWrap: 'wrap',
                   justifyContent: 'center',
+                  transition: 'all 0.3s ease',
                 }}
               >
                 <div
@@ -893,15 +1106,20 @@ export const App: React.FC = () => {
                     width: '8px',
                     height: '8px',
                     borderRadius: '50%',
-                    backgroundColor: '#34C759',
+                    backgroundColor: activeTransfer ? '#34C759' : selectedPeer ? '#38BDF8' : '#22c55e',
                     animation: 'pulseDot 1.8s ease-in-out infinite',
+                    boxShadow: activeTransfer ? '0 0 10px #34C759' : 'none',
                     flexShrink: 0,
                   }}
                 />
                 <span style={{ fontSize: windowWidth < 480 ? '11px' : '13px', fontWeight: 600, color: '#FFFFFF', textAlign: 'center' }}>
-                  {selectedPeer
-                    ? `${selectedPeer.name} Connected · Direct LAN Turbo`
-                    : 'Pixel 9 Pro Connected · Direct LAN Turbo'}
+                  {activeTransfer
+                    ? `${activeTransfer.isIncoming ? 'Receiving from' : 'Sending to'} ${activeTransfer.peerName}: ${activeTransfer.fileName}`
+                    : selectedPeer
+                    ? `${selectedPeer.name} Connected · ${selectedPeer.transport || 'Direct P2P'}`
+                    : discoveredPeers.length > 0
+                    ? `${discoveredPeers.length} Nearby Device${discoveredPeers.length > 1 ? 's' : ''} Ready · Direct P2P`
+                    : `Listening on Radar (${engine.localName})`}
                 </span>
                 <span
                   style={{
@@ -911,133 +1129,276 @@ export const App: React.FC = () => {
                     paddingLeft: '10px',
                   }}
                 >
-                  67.7 MB/s
+                  {activeTransfer
+                    ? `${((activeTransfer.speedBytesPerSec || 0) / (1024 * 1024)).toFixed(1)} MB/s`
+                    : selectedPeer
+                    ? 'Ready to transfer'
+                    : 'P2PFS/1 Engine'}
                 </span>
               </div>
 
-              {/* 3D Interactive Hero Globe with Pure White Connection Line */}
+              {/* 3D Interactive Hero Globe */}
               <div style={{ marginBottom: '26px' }}>
                 <HeroGlobe
-                  peers={peers.length > 0 ? peers : [
-                    { id: 'demo-1', name: 'Pixel 9 Pro', platform: 'android', connectionState: 'READY_TO_TRANSFER', ip: '192.168.1.12' },
-                    { id: 'demo-2', name: 'Surface Studio', platform: 'windows', connectionState: 'CONNECTED', ip: '192.168.1.15' },
-                  ]}
-                  selectedPeerId={selectedPeer?.id || 'demo-1'}
+                  peers={peers}
+                  selectedPeerId={selectedPeer?.id || (peers.length > 0 ? peers[0].id : null)}
                   onSelectPeer={(p) => setSelectedPeer(p)}
-                  isTransferring={false}
-                  transferSpeed="67.7 MB/s"
+                  isTransferring={Boolean(activeTransfer && (activeTransfer.state === 'TRANSFERRING' || activeTransfer.state === 'VERIFYING'))}
+                  transferSpeed={activeTransfer ? `${((activeTransfer.speedBytesPerSec || 0) / (1024 * 1024)).toFixed(1)} MB/s` : null}
                   size={windowWidth < 480 ? 190 : 240}
                 />
               </div>
 
-              {/* Minimal Connected Device Status Row */}
+              {/* Discovered / Connected Device Selector Row */}
               <div style={{ width: '100%', maxWidth: '720px', marginBottom: '22px' }}>
-                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                {discoveredPeers.length > 0 ? (
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                    {discoveredPeers.slice(0, 3).map((peer) => {
+                      const isSelected = selectedPeer?.id === peer.id || selectedPeer?.deviceId === peer.deviceId;
+                      return (
+                        <div
+                          key={peer.id || peer.deviceId}
+                          onClick={() => setSelectedPeer(peer)}
+                          className="cursor-pointer"
+                          style={{
+                            backgroundColor: isSelected ? 'rgba(52, 199, 89, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                            border: `1px solid ${isSelected ? 'rgba(52, 199, 89, 0.5)' : 'rgba(255, 255, 255, 0.1)'}`,
+                            borderRadius: '14px',
+                            padding: '12px 18px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '12px',
+                            flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
+                            boxShadow: isSelected ? '0 4px 20px rgba(52, 199, 89, 0.2)' : 'none',
+                            transition: 'all 0.2s ease',
+                          }}
+                        >
+                          <div style={{
+                            width: '36px',
+                            height: '36px',
+                            borderRadius: '10px',
+                            background: peer.platform === 'android' ? '#10B981' : peer.platform === 'windows' ? '#0078D4' : '#6366F1',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#FFF',
+                            fontWeight: 800,
+                            fontSize: '12px',
+                            flexShrink: 0,
+                          }}>
+                            {peer.platform === 'android' ? '📱' : peer.platform === 'windows' ? '💻' : '🌐'}
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {peer.name}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#34C759', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#34C759', display: 'inline-block' }} />
+                              {peer.platform.toUpperCase()} · Ready to transfer
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
                   <div
                     style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                      border: '1px solid rgba(255, 255, 255, 0.16)',
+                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                      border: '1px dashed rgba(255, 255, 255, 0.18)',
                       borderRadius: '14px',
-                      padding: '12px 18px',
+                      padding: '16px 20px',
                       display: 'flex',
                       alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
                       gap: '12px',
-                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
-                      boxShadow: '0 4px 16px rgba(0, 0, 0, 0.4)',
                     }}
                   >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-                      <line x1="12" y1="18" x2="12.01" y2="18"/>
-                    </svg>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>Pixel 9 Pro</div>
-                      <div style={{ fontSize: '11px', color: '#34C759', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#34C759', display: 'inline-block' }} />
-                        Android 15 · Ready to transfer
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                      <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>
+                          This Node: {engine.localName} ({engine.platform})
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                          Radar listening · Open another tab or connect your phone on this Wi-Fi
+                        </div>
                       </div>
                     </div>
+                    <button
+                      onClick={handleOpenSecondTab}
+                      style={{
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        borderRadius: '9999px',
+                        padding: '6px 14px',
+                        color: '#FFFFFF',
+                        fontSize: '12px',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)')}
+                    >
+                      + Test in 2nd Tab
+                    </button>
                   </div>
-
-                  <div
-                    style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      borderRadius: '14px',
-                      padding: '12px 18px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
-                    }}
-                  >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-                      <line x1="8" y1="21" x2="16" y2="21"/>
-                      <line x1="12" y1="17" x2="12" y2="21"/>
-                    </svg>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>Surface Studio</div>
-                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>Windows 11 · Dynamic Island Ready</div>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      backgroundColor: 'rgba(255, 255, 255, 0.04)',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      borderRadius: '14px',
-                      padding: '12px 18px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      flex: windowWidth < 640 ? '1 1 100%' : '1 1 200px',
-                    }}
-                  >
-                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <circle cx="12" cy="12" r="10"/>
-                      <line x1="2" y1="12" x2="22" y2="12"/>
-                      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-                    </svg>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>Chrome on macOS</div>
-                      <div style={{ fontSize: '11px', color: '#94a3b8' }}>WebRTC · Zero-Install</div>
-                    </div>
-                  </div>
-                </div>
+                )}
               </div>
 
-              {/* Transfer Simulation Box */}
+              {/* Hidden file input for native file selection */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                style={{ display: 'none' }}
+                onChange={(e) => handleSendFiles(e.target.files)}
+              />
+
+              {/* Real AirDrop Interactive File Dropzone & Transfer Box */}
               <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDragging(false);
+                  handleSendFiles(e.dataTransfer.files);
+                }}
                 style={{
                   width: '100%',
                   maxWidth: '720px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  borderRadius: '14px',
-                  padding: windowWidth < 480 ? '14px 16px' : '16px 20px',
+                  backgroundColor: isDragging ? 'rgba(52, 199, 89, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                  border: isDragging ? '1.5px dashed #34C759' : '1px solid rgba(255, 255, 255, 0.08)',
+                  borderRadius: '16px',
+                  padding: windowWidth < 480 ? '16px 18px' : '20px 24px',
+                  transition: 'all 0.2s ease',
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>4K_Cinematic_Broll.mov</span>
-                  <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 600 }}>82% · 1.8s remaining</span>
-                </div>
-                <div style={{ height: '6px', backgroundColor: 'rgba(255, 255, 255, 0.08)', borderRadius: '9999px', overflow: 'hidden', margin: '12px 0 10px' }}>
-                  <div style={{ height: '100%', width: '82%', background: 'linear-gradient(90deg, #34C759, #30D158)', borderRadius: '9999px' }} />
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px', fontSize: '11px', color: '#94a3b8' }}>
-                  <span>3.7 GB of 4.5 GB transferred at 67.7 MB/s</span>
-                  <span>SHA-256 Checksum Verified</span>
-                </div>
+                {activeTransfer ? (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: '#FFFFFF' }}>
+                        {activeTransfer.isIncoming ? '📥 Receiving: ' : '📤 Sending: '}
+                        {activeTransfer.fileName}
+                      </span>
+                      <span style={{ fontSize: '12px', color: '#34C759', fontWeight: 600 }}>
+                        {activeTransfer.fileSize > 0
+                          ? `${Math.min(100, Math.round((activeTransfer.transferredBytes / activeTransfer.fileSize) * 100))}%`
+                          : '0%'}
+                        {' · '}
+                        {activeTransfer.state === 'VERIFYING'
+                          ? 'Verifying SHA-256...'
+                          : activeTransfer.state === 'COMPLETED'
+                          ? 'Completed ✓'
+                          : activeTransfer.etaSeconds > 0
+                          ? `${activeTransfer.etaSeconds}s remaining`
+                          : 'Streaming...'}
+                      </span>
+                    </div>
+
+                    {/* Live Progress Bar */}
+                    <div style={{ height: '7px', backgroundColor: 'rgba(255, 255, 255, 0.08)', borderRadius: '9999px', overflow: 'hidden', margin: '14px 0 12px' }}>
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${activeTransfer.fileSize > 0 ? Math.min(100, Math.round((activeTransfer.transferredBytes / activeTransfer.fileSize) * 100)) : 0}%`,
+                          background: 'linear-gradient(90deg, #34C759, #30D158)',
+                          borderRadius: '9999px',
+                          transition: 'width 0.15s ease',
+                          boxShadow: '0 0 10px rgba(52, 199, 89, 0.5)',
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px', fontSize: '11.5px', color: '#94a3b8' }}>
+                      <span>
+                        {((activeTransfer.transferredBytes || 0) / (1024 * 1024)).toFixed(1)} MB of {((activeTransfer.fileSize || 0) / (1024 * 1024)).toFixed(1)} MB transferred at {((activeTransfer.speedBytesPerSec || 0) / (1024 * 1024)).toFixed(1)} MB/s
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span style={{ color: activeTransfer.state === 'COMPLETED' ? '#34C759' : '#94a3b8' }}>
+                          SHA-256 {activeTransfer.state === 'COMPLETED' ? 'Verified ✓' : 'Stream Hashing'}
+                        </span>
+                        <button
+                          onClick={() => engine.cancelActiveTransfer()}
+                          style={{
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            border: '1px solid rgba(239, 68, 68, 0.3)',
+                            borderRadius: '6px',
+                            padding: '2px 8px',
+                            color: '#ef4444',
+                            fontSize: '11px',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+                    <div>
+                      <div style={{ fontSize: '13.5px', fontWeight: 700, color: '#FFFFFF' }}>
+                        {selectedPeer ? `Ready to AirDrop to ${selectedPeer.name}` : 'AirDrop File Streamer'}
+                      </div>
+                      <div style={{ fontSize: '11.5px', color: '#94a3b8', marginTop: '3px' }}>
+                        {selectedPeer
+                          ? 'Drag & drop any file here or click Browse to stream directly at full LAN speed'
+                          : 'Select a nearby device above or drop files to initiate direct P2P transfer'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        style={{
+                          background: '#FFFFFF',
+                          color: '#000000',
+                          border: 'none',
+                          borderRadius: '9999px',
+                          padding: '9px 18px',
+                          fontSize: '12.5px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          boxShadow: '0 4px 12px rgba(255, 255, 255, 0.2)',
+                          transition: 'all 0.2s ease',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#E5E5EA')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = '#FFFFFF')}
+                      >
+                        ⚡ Send File via AirDrop
+                      </button>
+                      <button
+                        onClick={handleOpenSecondTab}
+                        style={{
+                          background: 'rgba(255, 255, 255, 0.08)',
+                          color: '#FFFFFF',
+                          border: '1px solid rgba(255, 255, 255, 0.16)',
+                          borderRadius: '9999px',
+                          padding: '9px 14px',
+                          fontSize: '12.5px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          transition: 'all 0.2s ease',
+                        }}
+                      >
+                        Test in 2nd Tab
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            FEATURES SECTION
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
         <section id="features" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
@@ -1089,9 +1450,9 @@ export const App: React.FC = () => {
         </section>
       </AnimatedContent>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            PROTOCOL SECTION
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
         <section id="protocol" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
@@ -1133,9 +1494,9 @@ export const App: React.FC = () => {
         </section>
       </AnimatedContent>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            APP ARCHITECTURE SECTION
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
         <section id="architecture" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
@@ -1209,9 +1570,9 @@ export const App: React.FC = () => {
         </section>
       </AnimatedContent>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            PRODUCTION RELEASES (With Dynamic Proximity BorderGlow, Perfectly Aligned)
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
         <section id="downloads" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
@@ -1258,7 +1619,7 @@ export const App: React.FC = () => {
                         </div>
                         <div>
                           <div style={{ fontSize: '21px', fontWeight: 800, color: textPrimary, letterSpacing: '-0.02em' }}>Windows Desktop</div>
-                          <div style={{ fontSize: '13px', color: textMuted, marginTop: '2px' }}>v2.0.1 · Windows 10 &amp; 11 (64-bit)</div>
+                          <div style={{ fontSize: '13px', color: textMuted, marginTop: '2px' }}>v2.0.1 Â· Windows 10 &amp; 11 (64-bit)</div>
                         </div>
                       </div>
                       <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '9999px', background: isDark ? 'rgba(22, 163, 74, 0.2)' : '#dcfce7', color: '#16a34a', border: '1px solid #bbf7d0' }}>
@@ -1384,7 +1745,7 @@ export const App: React.FC = () => {
                         </div>
                         <div>
                           <div style={{ fontSize: '21px', fontWeight: 800, color: textPrimary, letterSpacing: '-0.02em' }}>Android Mobile</div>
-                          <div style={{ fontSize: '13px', color: textMuted, marginTop: '2px' }}>v2.0.1 · Android 8.0+ (ARM64)</div>
+                          <div style={{ fontSize: '13px', color: textMuted, marginTop: '2px' }}>v2.0.1 Â· Android 8.0+ (ARM64)</div>
                         </div>
                       </div>
                       <span style={{ fontSize: '11px', fontWeight: 700, padding: '4px 10px', borderRadius: '9999px', background: isDark ? 'rgba(22, 163, 74, 0.2)' : '#dcfce7', color: '#16a34a', border: '1px solid #bbf7d0' }}>
@@ -1449,7 +1810,7 @@ export const App: React.FC = () => {
                         fontWeight: 600,
                       }}
                     >
-                      <span>View GitHub Release Notes ↗</span>
+                      <span>View GitHub Release Notes â†—</span>
                       <span style={{ color: textMuted, fontSize: '12px' }}>Changelog</span>
                     </a>
                   </div>
@@ -1551,7 +1912,7 @@ export const App: React.FC = () => {
                         fontWeight: 600,
                       }}
                     >
-                      <span>Track Progress on GitHub ↗</span>
+                      <span>Track Progress on GitHub â†—</span>
                       <span style={{ color: textMuted, fontSize: '12px' }}>Open Source</span>
                     </a>
                   </div>
@@ -1562,9 +1923,9 @@ export const App: React.FC = () => {
         </section>
       </AnimatedContent>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            BUY ME A COFFEE / SUPPORT (Dynamic Proximity BorderGlow, Clean Direct UI)
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <AnimatedContent distance={40} duration={0.8} threshold={0.08}>
         <section id="support" style={{ padding: windowWidth < 640 ? '48px 0' : '96px 0', borderTop: `1px solid ${borderSubtle}` }}>
           <div className="section-container" style={{ maxWidth: '860px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px', textAlign: 'center' }}>
@@ -1618,7 +1979,7 @@ export const App: React.FC = () => {
                     style={{ borderRadius: '12px', objectFit: 'contain', display: 'block', margin: '0 auto' }}
                   />
                   <div style={{ marginTop: '12px' }}>
-                    <p style={{ fontSize: '13px', fontWeight: 700, color: textPrimary }}>Union Bank of India • PhonePe QR</p>
+                    <p style={{ fontSize: '13px', fontWeight: 700, color: textPrimary }}>Union Bank of India â€¢ PhonePe QR</p>
                     <p style={{ fontSize: '11px', color: textMuted, marginTop: '2px' }}>Payee: B.JASWANTH REDDY</p>
                   </div>
                 </div>
@@ -1663,14 +2024,14 @@ export const App: React.FC = () => {
                       flexShrink: 0,
                     }}
                   >
-                    {copiedUpi ? 'Copied ✓' : 'Copy UPI'}
+                    {copiedUpi ? 'Copied âœ“' : 'Copy UPI'}
                   </button>
                 </div>
 
                 {/* SlideCommit Component for interactive commitment */}
                 <div className="slide-commit" style={{ marginTop: '4px', marginBottom: '22px', maxWidth: '100%', display: 'flex', justifyContent: 'center' }}>
                   <SlideCommit
-                    label={`Slide to support · ₹${selectedTier}`}
+                    label={`Slide to support Â· â‚¹${selectedTier}`}
                     doneLabel="Support confirmed! Thank you"
                     errorLabel="Action failed"
                     onConfirm={handleSlideCommit}
@@ -1694,7 +2055,7 @@ export const App: React.FC = () => {
                 {/* Clean Support Tiers */}
                 <div style={{ display: 'flex', justifyContent: 'center', gap: windowWidth < 480 ? '8px' : '14px', flexWrap: 'wrap', width: '100%' }}>
                   <div
-                    onClick={() => { setSelectedTier(50); setSupportNotice('Selected: 1 Coffee (₹50 / $1)'); }}
+                    onClick={() => { setSelectedTier(50); setSupportNotice('Selected: 1 Coffee (â‚¹50 / $1)'); }}
                     className="cursor-pointer"
                     style={{
                       padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
@@ -1717,11 +2078,11 @@ export const App: React.FC = () => {
                       </svg>
                     </div>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textPrimary }}>1 Coffee</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹50 / $1</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 50 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>â‚¹50 / $1</div>
                   </div>
 
                   <div
-                    onClick={() => { setSelectedTier(150); setSupportNotice('Selected: 3 Coffees (₹150 / $2)'); }}
+                    onClick={() => { setSelectedTier(150); setSupportNotice('Selected: 3 Coffees (â‚¹150 / $2)'); }}
                     className="cursor-pointer"
                     style={{
                       padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
@@ -1746,11 +2107,11 @@ export const App: React.FC = () => {
                       </svg>
                     </div>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textPrimary }}>3 Coffees</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹150 / $2</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 150 ? (isDark ? '#000000' : '#ffffff') : textMuted, marginTop: '2px', fontWeight: 600 }}>â‚¹150 / $2</div>
                   </div>
 
                   <div
-                    onClick={() => { setSelectedTier(500); setSupportNotice('Selected: Supporter Star (₹500 / $6)'); }}
+                    onClick={() => { setSelectedTier(500); setSupportNotice('Selected: Supporter Star (â‚¹500 / $6)'); }}
                     className="cursor-pointer"
                     style={{
                       padding: windowWidth < 480 ? '12px 14px' : '14px 20px',
@@ -1769,7 +2130,7 @@ export const App: React.FC = () => {
                       </svg>
                     </div>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: selectedTier === 500 ? (isDark ? '#f59e0b' : '#b45309') : textPrimary }}>Supporter</div>
-                    <div style={{ fontSize: '11px', color: selectedTier === 500 ? (isDark ? '#f59e0b' : '#b45309') : textMuted, marginTop: '2px', fontWeight: 600 }}>₹500 / $6</div>
+                    <div style={{ fontSize: '11px', color: selectedTier === 500 ? (isDark ? '#f59e0b' : '#b45309') : textMuted, marginTop: '2px', fontWeight: 600 }}>â‚¹500 / $6</div>
                   </div>
                 </div>
               </div>
@@ -1778,9 +2139,9 @@ export const App: React.FC = () => {
         </section>
       </AnimatedContent>
 
-      {/* ══════════════════════════════════════════════════════════════════════════
+      {/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
            FOOTER
-      ══════════════════════════════════════════════════════════════════════════ */}
+      â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */}
       <footer style={{ borderTop: `1px solid ${borderSubtle}`, padding: windowWidth < 640 ? '44px 0 28px' : '64px 0 36px', backgroundColor: pageBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
         <div className="section-container" style={{ maxWidth: '1220px', margin: '0 auto', padding: windowWidth < 640 ? '0 16px' : '0 28px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: windowWidth < 640 ? '28px' : '36px' }}>
@@ -1883,7 +2244,7 @@ export const App: React.FC = () => {
           </div>
 
           <div style={{ marginTop: '40px', paddingTop: '24px', borderTop: `1px solid ${borderSubtle}`, display: 'flex', justifyContent: 'space-between', alignItems: windowWidth < 640 ? 'flex-start' : 'center', flexDirection: windowWidth < 640 ? 'column' : 'row', gap: '14px', fontSize: '12px', color: textMuted }}>
-            <span>© 2026 AuraDrop. Open source under the MIT License. Developed by B. Jaswanth Reddy · DPDP Act 2023 Compliant.</span>
+            <span>Â© 2026 AuraDrop. Open source under the MIT License. Developed by B. Jaswanth Reddy Â· DPDP Act 2023 Compliant.</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
               <button
                 onClick={() => setIsCommandMenuOpen(true)}
@@ -1898,7 +2259,7 @@ export const App: React.FC = () => {
                   fontWeight: 600,
                 }}
               >
-                Press ⌘K for Commands
+                Press âŒ˜K for Commands
               </button>
               <span className="tabular-nums">Version 2.0.1</span>
             </div>
@@ -1908,6 +2269,7 @@ export const App: React.FC = () => {
 
       {/* MODALS & OVERLAYS */}
       <DownloadsModal isOpen={isDownloadsOpen} onClose={() => setIsDownloadsOpen(false)} isDark={isDark} />
+      <DiagnosticsModal isOpen={isDiagnosticsOpen} onClose={() => setIsDiagnosticsOpen(false)} isDark={isDark} />
       <LegalModal
         isOpen={isLegalOpen}
         onClose={() => setIsLegalOpen(false)}

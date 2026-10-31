@@ -36,6 +36,7 @@ export interface TransferEngineEvent {
     | 'diagnostics';
   transferId: string;
   senderName: string;
+  receiverName?: string;
   fileName: string;
   fileSize: number;
   transferredBytes?: number;
@@ -80,6 +81,8 @@ export class TransferEngine {
     expectedSha256: string;
     receivedBytes: number;
     verifiedOffset: number;
+    nextExpectedSequence: number;
+    pendingChunks: Map<number, Uint8Array>;
     hasher: IncrementalSha256;
     diskWriter: ProgressiveDiskWriter;
     startTime: number;
@@ -111,7 +114,7 @@ export class TransferEngine {
 
   private activeXhr: XMLHttpRequest | null = null;
 
-  // Throttling for UI updates (10–20 updates/sec)
+  // Throttling for UI updates (10â€“20 updates/sec)
   private lastUiNotifyTime = 0;
 
   private constructor() {
@@ -247,6 +250,8 @@ export class TransferEngine {
     this.webRtcTransport.onControlReceived((msg) => {
       if (msg.type === 'ACK_COMPLETE' && this.activeOutgoingTransfer) {
         this.finalizeOutgoingTransfer(msg.transferId || this.activeOutgoingTransfer.transferId);
+      } else if (msg.type === 'TRANSFER_RESPONSE') {
+        this.handleTransferResponseMessage(msg);
       } else if (msg.type === 'PAUSE' && this.activeIncomingTransfer) {
         this.activeIncomingTransfer.state = 'PAUSED';
       } else if (msg.type === 'CANCEL') {
@@ -311,6 +316,8 @@ export class TransferEngine {
       expectedSha256: payload.sha256 || '',
       receivedBytes: resumeOffset,
       verifiedOffset: resumeOffset,
+      nextExpectedSequence: Math.floor(resumeOffset / (64 * 1024)),
+      pendingChunks: new Map<number, Uint8Array>(),
       hasher: new IncrementalSha256(),
       diskWriter,
       startTime: Date.now(),
@@ -380,60 +387,96 @@ export class TransferEngine {
     if (frame.frameType === BinaryFrameType.DATA_CHUNK) {
       xfer.state = 'TRANSFERRING';
       const chunkBytes: Uint8Array = frame.payload;
+      const chunkSize = xfer.chunkSize || 65536;
+      const seq =
+        chunkSize > 0 && frame.offset >= BigInt(chunkSize)
+          ? Math.floor(Number(frame.offset) / chunkSize)
+          : frame.sequence;
 
-      // 1. Incremental streaming SHA-256 (no whole-file RAM loading)
-      xfer.hasher.update(chunkBytes);
+      if (seq === xfer.nextExpectedSequence) {
+        // In-order chunk: process immediately
+        await this.processIncomingChunk(xfer, chunkBytes);
+        xfer.nextExpectedSequence++;
 
-      // 2. Progressive bounded disk write
-      await xfer.diskWriter.writeChunk(chunkBytes);
-
-      xfer.receivedBytes += chunkBytes.byteLength;
-      xfer.verifiedOffset = xfer.receivedBytes;
-
-      // 3. Real Throughput Calculation with Exponential Smoothing
-      const now = performance.now();
-      const timeDeltaMs = now - xfer.lastCalcTime;
-      if (timeDeltaMs >= 100) {
-        const bytesDelta = xfer.receivedBytes - xfer.lastCalcBytes;
-        const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
-        xfer.smoothedSpeed =
-          xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
-        xfer.lastCalcTime = now;
-        xfer.lastCalcBytes = xfer.receivedBytes;
+        // Drain any contiguous buffered chunks
+        while (xfer.pendingChunks.has(xfer.nextExpectedSequence)) {
+          const nextBytes = xfer.pendingChunks.get(xfer.nextExpectedSequence)!;
+          xfer.pendingChunks.delete(xfer.nextExpectedSequence);
+          await this.processIncomingChunk(xfer, nextBytes);
+          xfer.nextExpectedSequence++;
+        }
+      } else if (seq > xfer.nextExpectedSequence) {
+        // Out-of-order chunk from striped multi-channel: buffer until gap is filled
+        if (xfer.pendingChunks.size < 512) {
+          xfer.pendingChunks.set(seq, chunkBytes);
+        }
       }
-
-      const remainingBytes = Math.max(0, xfer.fileSize - xfer.receivedBytes);
-      const etaSeconds = xfer.smoothedSpeed > 0 ? Math.ceil(remainingBytes / xfer.smoothedSpeed) : 0;
-
-      // 4. Periodic Resume Checkpoint (every 5 MB)
-      if (xfer.receivedBytes % (5 * 1024 * 1024) < chunkBytes.byteLength) {
-        this.storage.saveCheckpoint({
-          transferId: xfer.transferId,
-          fileId: xfer.fileName,
-          fileName: xfer.fileName,
-          fileSize: xfer.fileSize,
-          expectedSha256: xfer.expectedSha256,
-          verifiedOffset: xfer.verifiedOffset,
-          updatedAt: new Date().toISOString(),
-        });
-      }
-
-      this.notifyEvent({
-        type: 'progress',
-        transferId: xfer.transferId,
-        senderName: xfer.senderName,
-        fileName: xfer.fileName,
-        fileSize: xfer.fileSize,
-        transferredBytes: xfer.receivedBytes,
-        verifiedBytes: xfer.verifiedOffset,
-        speedBytesPerSec: xfer.smoothedSpeed,
-        etaSeconds,
-        state: 'TRANSFERRING',
-        transport: 'WebRTC Direct',
-      });
+      // If seq < xfer.nextExpectedSequence, it is a duplicate frame, ignore safely.
     } else if (frame.frameType === BinaryFrameType.FILE_FIN) {
+      // Drain any remaining out-of-order chunks in sorted sequence order
+      if (xfer.pendingChunks.size > 0) {
+        const remainingSeqs = Array.from(xfer.pendingChunks.keys()).sort((a, b) => a - b);
+        for (const s of remainingSeqs) {
+          const b = xfer.pendingChunks.get(s)!;
+          await this.processIncomingChunk(xfer, b);
+        }
+        xfer.pendingChunks.clear();
+      }
       await this.finalizeIncomingTransfer();
     }
+  }
+
+  private async processIncomingChunk(xfer: any, chunkBytes: Uint8Array): Promise<void> {
+    // 1. Incremental streaming SHA-256 (no whole-file RAM loading)
+    xfer.hasher.update(chunkBytes);
+
+    // 2. Progressive bounded disk write
+    await xfer.diskWriter.writeChunk(chunkBytes);
+
+    xfer.receivedBytes += chunkBytes.byteLength;
+    xfer.verifiedOffset = xfer.receivedBytes;
+
+    // 3. Real Throughput Calculation with Exponential Smoothing
+    const now = performance.now();
+    const timeDeltaMs = now - xfer.lastCalcTime;
+    if (timeDeltaMs >= 100) {
+      const bytesDelta = xfer.receivedBytes - xfer.lastCalcBytes;
+      const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
+      xfer.smoothedSpeed =
+        xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
+      xfer.lastCalcTime = now;
+      xfer.lastCalcBytes = xfer.receivedBytes;
+    }
+
+    const remainingBytes = Math.max(0, xfer.fileSize - xfer.receivedBytes);
+    const etaSeconds = xfer.smoothedSpeed > 0 ? Math.ceil(remainingBytes / xfer.smoothedSpeed) : 0;
+
+    // 4. Periodic Resume Checkpoint (every 5 MB)
+    if (xfer.receivedBytes % (5 * 1024 * 1024) < chunkBytes.byteLength) {
+      this.storage.saveCheckpoint({
+        transferId: xfer.transferId,
+        fileId: xfer.fileName,
+        fileName: xfer.fileName,
+        fileSize: xfer.fileSize,
+        expectedSha256: xfer.expectedSha256,
+        verifiedOffset: xfer.verifiedOffset,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    this.notifyEvent({
+      type: 'progress',
+      transferId: xfer.transferId,
+      senderName: xfer.senderName,
+      fileName: xfer.fileName,
+      fileSize: xfer.fileSize,
+      transferredBytes: xfer.receivedBytes,
+      verifiedBytes: xfer.verifiedOffset,
+      speedBytesPerSec: xfer.smoothedSpeed,
+      etaSeconds,
+      state: 'TRANSFERRING',
+      transport: 'WebRTC Direct',
+    });
   }
 
   private async finalizeIncomingTransfer(): Promise<void> {
@@ -552,15 +595,49 @@ export class TransferEngine {
     const transferId = `xfer_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const safeName = this.storage.sanitizeFilename(file.name);
 
+    // Immediately notify UI that transfer is initiating
+    this.notifyEvent(
+      {
+        type: 'progress',
+        transferId,
+        senderName: this.localName,
+        receiverName: targetPeer.name,
+        fileName: safeName,
+        fileSize: file.size,
+        transferredBytes: 0,
+        verifiedBytes: 0,
+        speedBytesPerSec: 0,
+        etaSeconds: 0,
+        state: 'VERIFYING',
+        transport: 'Preparing checksum...',
+      },
+      true
+    );
+
     // Compute expected SHA-256 incrementally across bounded slices (never loading whole file into RAM)
-    const previewHasher = new IncrementalSha256();
-    const hashSliceSize = 1024 * 1024; // 1 MB slice
-    for (let offset = 0; offset < file.size; offset += hashSliceSize) {
-      const sliceBlob = file.slice(offset, offset + hashSliceSize);
-      const sliceBuffer = await sliceBlob.arrayBuffer();
-      previewHasher.update(new Uint8Array(sliceBuffer));
+    let senderSha256 = '';
+    if (file.size <= 32 * 1024 * 1024 && typeof crypto !== 'undefined' && crypto.subtle) {
+      const buf = await file.arrayBuffer();
+      const digest = await crypto.subtle.digest('SHA-256', buf);
+      senderSha256 = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    } else {
+      const previewHasher = new IncrementalSha256();
+      const hashSliceSize = 2 * 1024 * 1024; // 2 MB slice
+      let processed = 0;
+      for (let offset = 0; offset < file.size; offset += hashSliceSize) {
+        const sliceBlob = file.slice(offset, offset + hashSliceSize);
+        const sliceBuffer = await sliceBlob.arrayBuffer();
+        previewHasher.update(new Uint8Array(sliceBuffer));
+        processed += sliceBuffer.byteLength;
+        // Cooperative yield to keep browser responsive on large files
+        if (processed % (8 * 1024 * 1024) < hashSliceSize) {
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      senderSha256 = previewHasher.finalize();
     }
-    const senderSha256 = previewHasher.finalize();
 
     // Check for existing resume checkpoint
     const checkpoint = this.storage.getCheckpoint(transferId);
@@ -575,7 +652,7 @@ export class TransferEngine {
       hasher: new IncrementalSha256(),
       sentBytes: resumeOffset,
       verifiedOffset: resumeOffset,
-      chunkSize: 256 * 1024, // 256 KB starting chunk size
+      chunkSize: 64 * 1024, // Safe 64 KB starting chunk size for WebRTC SCTP
       startTime: Date.now(),
       lastCalcTime: performance.now(),
       lastCalcBytes: resumeOffset,
@@ -616,6 +693,7 @@ export class TransferEngine {
         type: 'progress',
         transferId,
         senderName: this.localName,
+        receiverName: targetPeer.name,
         fileName: safeName,
         fileSize: file.size,
         transferredBytes: resumeOffset,
@@ -757,6 +835,7 @@ export class TransferEngine {
           type: 'progress',
           transferId,
           senderName: this.localName,
+          receiverName: targetPeer.name,
           fileName: safeName,
           fileSize: file.size,
           transferredBytes: 0,
@@ -801,6 +880,7 @@ export class TransferEngine {
             type: 'progress',
             transferId,
             senderName: this.localName,
+            receiverName: targetPeer.name,
             fileName: safeName,
             fileSize: event.total,
             transferredBytes: event.loaded,
@@ -841,6 +921,7 @@ export class TransferEngine {
                 type: 'completed',
                 transferId,
                 senderName: this.localName,
+                receiverName: targetPeer.name,
                 fileName: safeName,
                 fileSize: file.size,
                 transferredBytes: file.size,
@@ -998,19 +1079,137 @@ export class TransferEngine {
     xfer.state = 'TRANSFERRING';
 
     const sendLoop = async () => {
-      if (xfer.isCancelled) return;
-      if (xfer.isPaused) {
-        xfer.state = 'PAUSED';
-        this.storage.saveCheckpoint({
+      // High-performance Pipelined Sliding Window:
+      // Decouple asynchronous file slice/disk reading from network transmission.
+      // While chunk N is in flight across the multi-channel WebRTC network,
+      // chunks N+1..N+4 are ALREADY read from disk concurrently!
+      const PIPELINE_DEPTH = 4;
+
+      interface PrefetchedChunk {
+        seq: number;
+        off: number;
+        len: number;
+        framePromise: Promise<ArrayBuffer>;
+      }
+
+      const scheduleChunkRead = (seq: number, off: number, size: number): PrefetchedChunk => {
+        const actualSize = Math.min(size, totalBytes - off);
+        const framePromise = (async () => {
+          const sliceBlob = file.slice(off, off + actualSize);
+          const sliceBuf = await sliceBlob.arrayBuffer();
+          const chunkBytes = new Uint8Array(sliceBuf);
+          return encodeBinaryFrame(
+            BinaryFrameType.DATA_CHUNK,
+            xfer.transferId,
+            seq,
+            BigInt(off),
+            chunkBytes
+          );
+        })();
+        return { seq, off, len: actualSize, framePromise };
+      };
+
+      const pipeline: PrefetchedChunk[] = [];
+      let nextScheduleOffset = offset;
+      let nextScheduleSeq = sequence;
+      let lastYieldBytes = offset;
+
+      // Prime the pipeline with the first PIPELINE_DEPTH chunks
+      while (nextScheduleOffset < totalBytes && pipeline.length < PIPELINE_DEPTH) {
+        const chunk = scheduleChunkRead(nextScheduleSeq, nextScheduleOffset, xfer.chunkSize);
+        pipeline.push(chunk);
+        nextScheduleOffset += chunk.len;
+        nextScheduleSeq++;
+      }
+
+      while (pipeline.length > 0) {
+        if (xfer.isCancelled) {
+          pipeline.length = 0;
+          return;
+        }
+        if (xfer.isPaused) {
+          xfer.state = 'PAUSED';
+          this.storage.saveCheckpoint({
+            transferId: xfer.transferId,
+            fileId: xfer.file.name,
+            fileName: xfer.file.name,
+            fileSize: totalBytes,
+            expectedSha256: xfer.expectedSha256,
+            verifiedOffset: offset,
+            updatedAt: new Date().toISOString(),
+          });
+          return;
+        }
+
+        // 1. Fetch the next chunk (its disk read was already running in parallel!)
+        const current = pipeline.shift()!;
+        const frameBuffer = await current.framePromise;
+
+        // 2. Schedule the next chunk ahead in background to keep pipeline saturated
+        if (nextScheduleOffset < totalBytes) {
+          // Dynamic adaptive chunk sizing (64 KB -> 128 KB -> 192 KB -> 256 KB)
+          xfer.chunkSize =
+            xfer.smoothedSpeed > 80 * 1024 * 1024
+              ? 256 * 1024
+              : xfer.smoothedSpeed > 50 * 1024 * 1024
+              ? 192 * 1024
+              : xfer.smoothedSpeed > 20 * 1024 * 1024
+              ? 128 * 1024
+              : 64 * 1024;
+
+          const chunk = scheduleChunkRead(nextScheduleSeq, nextScheduleOffset, xfer.chunkSize);
+          pipeline.push(chunk);
+          nextScheduleOffset += chunk.len;
+          nextScheduleSeq++;
+        }
+
+        // 3. Send frame via least-loaded striped data channel
+        try {
+          await this.webRtcTransport.sendFrame(frameBuffer);
+        } catch (e) {
+          console.warn('Transport frame send error', e);
+        }
+
+        offset += current.len;
+        sequence++;
+        xfer.sentBytes = offset;
+        xfer.verifiedOffset = offset;
+
+        // 4. Real Throughput Calculation with Exponential Smoothing
+        const now = performance.now();
+        const timeDeltaMs = now - xfer.lastCalcTime;
+        if (timeDeltaMs >= 100) {
+          const bytesDelta = xfer.sentBytes - xfer.lastCalcBytes;
+          const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
+          xfer.smoothedSpeed =
+            xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
+          xfer.lastCalcTime = now;
+          xfer.lastCalcBytes = xfer.sentBytes;
+        }
+
+        const remainingBytes = Math.max(0, totalBytes - offset);
+        const etaSeconds = xfer.smoothedSpeed > 0 ? Math.ceil(remainingBytes / xfer.smoothedSpeed) : 0;
+
+        this.notifyEvent({
+          type: 'progress',
           transferId: xfer.transferId,
-          fileId: xfer.file.name,
-          fileName: xfer.file.name,
+          senderName: this.localName,
+          receiverName: xfer.targetPeerName,
+          fileName: file.name,
           fileSize: totalBytes,
-          expectedSha256: xfer.expectedSha256,
-          verifiedOffset: offset,
-          updatedAt: new Date().toISOString(),
+          transferredBytes: offset,
+          verifiedBytes: offset,
+          speedBytesPerSec: xfer.smoothedSpeed,
+          etaSeconds,
+          state: 'TRANSFERRING',
+          transport: 'WebRTC Direct',
         });
-        return;
+
+        // Cooperative event loop yield every 4 MB to maintain 60fps UI without bottlenecking high-throughput I/O
+        if (offset - lastYieldBytes >= 4 * 1024 * 1024) {
+          lastYieldBytes = offset;
+          await new Promise((r) => setTimeout(r, 0));
+        }
       }
 
       if (offset >= totalBytes) {
@@ -1030,6 +1229,7 @@ export class TransferEngine {
             type: 'progress',
             transferId: xfer.transferId,
             senderName: this.localName,
+            receiverName: xfer.targetPeerName,
             fileName: file.name,
             fileSize: totalBytes,
             transferredBytes: totalBytes,
@@ -1040,75 +1240,7 @@ export class TransferEngine {
           true
         );
         // Sender waits for receiver's ACK_COMPLETE before marking COMPLETED (Section 22)
-        return;
       }
-
-      // Adaptive chunk sizing (256 KB up to 1 MB) based on measured speed
-      if (xfer.smoothedSpeed > 40 * 1024 * 1024) {
-        xfer.chunkSize = 1024 * 1024;
-      } else if (xfer.smoothedSpeed > 20 * 1024 * 1024) {
-        xfer.chunkSize = 512 * 1024;
-      } else {
-        xfer.chunkSize = 256 * 1024;
-      }
-
-      // Read chunk incrementally via file.slice (bounded RAM consumption)
-      const chunkBlob = file.slice(offset, offset + xfer.chunkSize);
-      const chunkBuffer = await chunkBlob.arrayBuffer();
-      const chunkBytes = new Uint8Array(chunkBuffer);
-
-      // Frame with binary header
-      const frameBuffer = encodeBinaryFrame(
-        BinaryFrameType.DATA_CHUNK,
-        xfer.transferId,
-        sequence,
-        BigInt(offset),
-        chunkBytes
-      );
-
-      // Send via WebRTC DataChannel (with automatic backpressure)
-      try {
-        await this.webRtcTransport.sendFrame(frameBuffer);
-      } catch (e) {
-        console.warn('Transport frame send error', e);
-      }
-
-      offset += chunkBytes.byteLength;
-      sequence++;
-      xfer.sentBytes = offset;
-      xfer.verifiedOffset = offset;
-
-      // Real Throughput Calculation with Exponential Smoothing
-      const now = performance.now();
-      const timeDeltaMs = now - xfer.lastCalcTime;
-      if (timeDeltaMs >= 100) {
-        const bytesDelta = xfer.sentBytes - xfer.lastCalcBytes;
-        const instantSpeed = (bytesDelta / timeDeltaMs) * 1000;
-        xfer.smoothedSpeed =
-          xfer.smoothedSpeed === 0 ? instantSpeed : xfer.smoothedSpeed * 0.7 + instantSpeed * 0.3;
-        xfer.lastCalcTime = now;
-        xfer.lastCalcBytes = xfer.sentBytes;
-      }
-
-      const remainingBytes = Math.max(0, totalBytes - offset);
-      const etaSeconds = xfer.smoothedSpeed > 0 ? Math.ceil(remainingBytes / xfer.smoothedSpeed) : 0;
-
-      this.notifyEvent({
-        type: 'progress',
-        transferId: xfer.transferId,
-        senderName: this.localName,
-        fileName: file.name,
-        fileSize: totalBytes,
-        transferredBytes: offset,
-        verifiedBytes: offset,
-        speedBytesPerSec: xfer.smoothedSpeed,
-        etaSeconds,
-        state: 'TRANSFERRING',
-        transport: 'WebRTC Direct',
-      });
-
-      // Cooperative yield
-      setTimeout(sendLoop, 12);
     };
 
     sendLoop();
@@ -1141,6 +1273,7 @@ export class TransferEngine {
         type: 'completed',
         transferId: xfer.transferId,
         senderName: this.localName,
+        receiverName: xfer.targetPeerName,
         fileName: xfer.file.name,
         fileSize: xfer.file.size,
         transferredBytes: xfer.file.size,
@@ -1161,6 +1294,16 @@ export class TransferEngine {
   // ---------------------------------------------------------------------------
   public acceptIncomingTransfer(): void {
     if (!this.activeIncomingTransfer) return;
+    this.webRtcTransport.sendControl({
+      type: 'TRANSFER_RESPONSE',
+      transferId: this.activeIncomingTransfer.transferId,
+      senderId: this.localId,
+      targetId: this.activeIncomingTransfer.senderId,
+      payload: {
+        accepted: true,
+        verifiedOffset: this.activeIncomingTransfer.verifiedOffset,
+      },
+    }).catch(() => {});
     this.signaling.sendTransferResponse(this.activeIncomingTransfer.senderId, {
       transferId: this.activeIncomingTransfer.transferId,
       accepted: true,
@@ -1170,6 +1313,15 @@ export class TransferEngine {
 
   public declineIncomingTransfer(): void {
     if (!this.activeIncomingTransfer) return;
+    this.webRtcTransport.sendControl({
+      type: 'TRANSFER_RESPONSE',
+      transferId: this.activeIncomingTransfer.transferId,
+      senderId: this.localId,
+      targetId: this.activeIncomingTransfer.senderId,
+      payload: {
+        accepted: false,
+      },
+    }).catch(() => {});
     this.signaling.sendTransferResponse(this.activeIncomingTransfer.senderId, {
       transferId: this.activeIncomingTransfer.transferId,
       accepted: false,

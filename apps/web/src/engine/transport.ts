@@ -38,7 +38,7 @@ export interface P2PTransport {
   isAvailable(): Promise<boolean>;
   connect(peer: PeerDevice): Promise<boolean>;
   sendControl(message: ControlMessage): Promise<void>;
-  sendFrame(frame: Uint8Array): Promise<void>;
+  sendFrame(frame: Uint8Array | ArrayBuffer): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
   cancel(): Promise<void>;

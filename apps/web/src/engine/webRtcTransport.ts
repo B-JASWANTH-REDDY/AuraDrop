@@ -11,8 +11,12 @@ export class WebRtcTransport implements P2PTransport {
   public name = 'WebRTC Direct';
 
   private peerConnection: RTCPeerConnection | null = null;
-  private dataChannel: RTCDataChannel | null = null;
+  private dataChannels: RTCDataChannel[] = [];
   private signaling: SignalingClient;
+
+  public get dataChannel(): RTCDataChannel | null {
+    return this.dataChannels.find((dc) => dc.readyState === 'open') || this.dataChannels[0] || null;
+  }
   private targetPeer: PeerDevice | null = null;
   private targetPeerId: string | null = null;
 
@@ -120,11 +124,18 @@ export class WebRtcTransport implements P2PTransport {
     this.peerConnection = new RTCPeerConnection(config);
     this.setupPeerConnectionEvents();
 
-    // Create reliable binary data channel (ordered, reliable delivery)
-    this.dataChannel = this.peerConnection.createDataChannel('auradrop-p2pfs', {
-      ordered: true,
-    });
-    this.setupDataChannel(this.dataChannel);
+    // Create reliable binary data channel pool (4 parallel striped data channels)
+    // Reverse-engineered from high-throughput open-source P2P streaming protocols (WebTorrent / SCTP Multi-Stream)
+    const NUM_STRIPED_CHANNELS = 4;
+    this.dataChannels = [];
+    for (let i = 0; i < NUM_STRIPED_CHANNELS; i++) {
+      const label = i === 0 ? 'auradrop-p2pfs' : `auradrop-p2pfs-${i}`;
+      const dc = this.peerConnection.createDataChannel(label, {
+        ordered: true,
+      });
+      this.setupDataChannel(dc);
+      this.dataChannels.push(dc);
+    }
 
     try {
       this.updateState('SIGNALING');
@@ -154,15 +165,18 @@ export class WebRtcTransport implements P2PTransport {
       this.targetPeerId = senderId;
       this.updateState('CONNECTING');
       this.pendingCandidates = [];
+      this.dataChannels = [];
 
       const config = await this.fetchRtcConfig();
       this.peerConnection = new RTCPeerConnection(config);
       this.setupPeerConnectionEvents();
 
       this.peerConnection.ondatachannel = (e) => {
-        console.log('[WebRTC] DataChannel received from remote peer');
-        this.dataChannel = e.channel;
-        this.setupDataChannel(this.dataChannel);
+        console.log(`[WebRTC] Striped DataChannel received: ${e.channel.label}`);
+        if (!this.dataChannels.some((c) => c.label === e.channel.label)) {
+          this.dataChannels.push(e.channel);
+        }
+        this.setupDataChannel(e.channel);
       };
 
       await this.peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: signal.sdp }));
@@ -325,11 +339,23 @@ export class WebRtcTransport implements P2PTransport {
     dc.onclose = () => {
       console.log('[WebRTC] RTCDataChannel closed');
       this.updateState('INTERRUPTED');
+      if (this.bufferedAmountDrainResolver) {
+        const res = this.bufferedAmountDrainResolver;
+        this.bufferedAmountDrainResolver = null;
+        this.bufferedAmountDrainPromise = null;
+        res();
+      }
     };
 
     dc.onerror = (e) => {
       console.error('[WebRTC] RTCDataChannel error:', e);
       this.updateState('FAILED_CONNECTION');
+      if (this.bufferedAmountDrainResolver) {
+        const res = this.bufferedAmountDrainResolver;
+        this.bufferedAmountDrainResolver = null;
+        this.bufferedAmountDrainPromise = null;
+        res();
+      }
     };
   }
 
@@ -365,30 +391,49 @@ export class WebRtcTransport implements P2PTransport {
   }
 
   // ---------------------------------------------------------------------------
-  // DATA TRANSMISSION WITH BACKPRESSURE (Section 18)
+  // DATA TRANSMISSION WITH MULTI-CHANNEL STRIPING & BACKPRESSURE (Section 18)
   // ---------------------------------------------------------------------------
-  public async sendFrame(frame: Uint8Array): Promise<void> {
-    if (!this.dataChannel || this.dataChannel.readyState !== 'open') {
+  public async sendFrame(frame: Uint8Array | ArrayBuffer): Promise<void> {
+    const openChannels = this.dataChannels.filter((dc) => dc.readyState === 'open');
+    if (openChannels.length === 0) {
       throw new Error('DataChannel not open');
     }
 
-    // High watermark: 2 MB (Section 17 & 18)
-    if (this.dataChannel.bufferedAmount > 2 * 1024 * 1024) {
+    // Dynamic Striping: select open channel with minimum bufferedAmount (least loaded)
+    let bestChannel = openChannels[0];
+    for (let i = 1; i < openChannels.length; i++) {
+      if (openChannels[i].bufferedAmount < bestChannel.bufferedAmount) {
+        bestChannel = openChannels[i];
+      }
+    }
+
+    // High watermark: 1 MB on optimal channel
+    if (bestChannel.bufferedAmount > 1024 * 1024) {
       if (!this.bufferedAmountDrainPromise) {
         this.bufferedAmountDrainPromise = new Promise((resolve) => {
           this.bufferedAmountDrainResolver = resolve;
+          // Fallback timeout prevents hanging if OS or background tab delays onbufferedamountlow
+          setTimeout(() => {
+            if (this.bufferedAmountDrainResolver === resolve) {
+              this.bufferedAmountDrainResolver = null;
+              this.bufferedAmountDrainPromise = null;
+              resolve();
+            }
+          }, 2000);
         });
       }
       await this.bufferedAmountDrainPromise;
     }
 
-    this.dataChannel.send(frame.buffer);
-    this.bytesSent += frame.byteLength;
+    bestChannel.send(frame as any);
+    const byteLen = (frame as any).byteLength || (frame as any).length || 0;
+    this.bytesSent += byteLen;
   }
 
   public async sendControl(message: ControlMessage): Promise<void> {
-    if (this.dataChannel && this.dataChannel.readyState === 'open') {
-      this.dataChannel.send(JSON.stringify(message));
+    const channel = this.dataChannel;
+    if (channel && channel.readyState === 'open') {
+      channel.send(JSON.stringify(message));
     }
   }
 
@@ -405,10 +450,12 @@ export class WebRtcTransport implements P2PTransport {
   }
 
   public async close(): Promise<void> {
-    if (this.dataChannel) {
-      this.dataChannel.close();
-      this.dataChannel = null;
+    for (const dc of this.dataChannels) {
+      try {
+        dc.close();
+      } catch {}
     }
+    this.dataChannels = [];
     if (this.peerConnection) {
       this.peerConnection.close();
       this.peerConnection = null;
@@ -430,15 +477,17 @@ export class WebRtcTransport implements P2PTransport {
   }
 
   public getStatistics(): TransportStatistics {
+    const openCount = this.dataChannels.filter((dc) => dc.readyState === 'open').length;
+    const totalBuffered = this.dataChannels.reduce((sum, dc) => sum + dc.bufferedAmount, 0);
     return {
-      transportName: this.name,
+      transportName: openCount > 1 ? `${this.name} (${openCount}x Striped)` : this.name,
       iceState: this.peerConnection?.iceConnectionState || 'new',
       connectionState: this.peerConnection?.connectionState || 'new',
       dataChannelState: this.dataChannel?.readyState || 'closed',
       rttMs: this.rttMs,
       bytesSent: this.bytesSent,
       bytesReceived: this.bytesReceived,
-      bufferedAmount: this.dataChannel?.bufferedAmount || 0,
+      bufferedAmount: totalBuffered,
       localCandidateType: this.localCandidateType,
       remoteCandidateType: this.remoteCandidateType,
     };

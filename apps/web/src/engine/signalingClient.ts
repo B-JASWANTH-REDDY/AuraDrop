@@ -354,6 +354,8 @@ export class SignalingClient {
     this.isHttpPolling = false;
   }
 
+  private broadcastAnnounceTimer: any = null;
+
   private setupBroadcastMesh(): void {
     if (typeof window === 'undefined' || typeof BroadcastChannel === 'undefined') return;
 
@@ -363,10 +365,71 @@ export class SignalingClient {
         const msg = event.data;
         if (!msg || typeof msg !== 'object') return;
 
+        // Peer Announcement from another tab/window
+        if (msg.type === 'TAB_ANNOUNCE' && msg.peer) {
+          const peer = msg.peer;
+          if (peer.deviceId && peer.deviceId !== this.identity.deviceId) {
+            this.localMeshPeers.set(peer.deviceId, {
+              id: peer.deviceId,
+              deviceId: peer.deviceId,
+              name: peer.displayName || peer.name || 'Nearby Browser',
+              deviceName: peer.deviceName || 'Web P2P Node',
+              platform: peer.platform || 'web',
+              ip: 'Local Browser Mesh',
+              port: 0,
+              lastSeen: new Date(),
+              isTrusted: true,
+              transport: 'WebRTC Direct (Mesh)',
+              connectionState: 'READY_TO_TRANSFER',
+            });
+            this.emitCombinedPeers();
+          }
+          return;
+        }
+
+        // Peer Leave from another tab/window
+        if (msg.type === 'TAB_LEAVE' && msg.deviceId) {
+          if (this.localMeshPeers.delete(msg.deviceId)) {
+            this.emitCombinedPeers();
+          }
+          return;
+        }
+
         if (msg.targetDeviceId === this.identity.deviceId) {
           this.handleIncomingMessage(msg.payload || msg);
         }
       };
+
+      const broadcastSelf = () => {
+        try {
+          if (this.broadcastChannel) {
+            this.broadcastChannel.postMessage({
+              type: 'TAB_ANNOUNCE',
+              peer: {
+                deviceId: this.identity.deviceId,
+                displayName: this.identity.displayName,
+                deviceName: this.identity.deviceName,
+                platform: this.identity.platform,
+              },
+            });
+          }
+        } catch {}
+      };
+
+      broadcastSelf();
+      if (this.broadcastAnnounceTimer) clearInterval(this.broadcastAnnounceTimer);
+      this.broadcastAnnounceTimer = setInterval(broadcastSelf, 2500);
+
+      window.addEventListener('beforeunload', () => {
+        try {
+          if (this.broadcastChannel) {
+            this.broadcastChannel.postMessage({
+              type: 'TAB_LEAVE',
+              deviceId: this.identity.deviceId,
+            });
+          }
+        } catch {}
+      });
     } catch (e) {
       console.warn('[AuraDrop] BroadcastChannel notice:', e);
     }
@@ -458,8 +521,19 @@ export class SignalingClient {
 
   private emitCombinedPeers(): void {
     const combined = new Map<string, PeerDevice>();
+    const now = Date.now();
 
-    // Add local LAN peers connected directly via LocalSignalingClient
+    // Prune stale browser mesh peers older than 8 seconds
+    for (const [id, peer] of this.localMeshPeers.entries()) {
+      if (peer.ip === 'Local Browser Mesh') {
+        const last = peer.lastSeen instanceof Date ? peer.lastSeen.getTime() : Number(peer.lastSeen || 0);
+        if (now - last > 8000) {
+          this.localMeshPeers.delete(id);
+        }
+      }
+    }
+
+    // Add local LAN peers connected directly via LocalSignalingClient or mesh
     for (const [id, peer] of this.localMeshPeers.entries()) {
       if (id !== this.identity.deviceId) {
         combined.set(id, peer);
@@ -642,7 +716,7 @@ export class SignalingClient {
     const isTrusted = p.isTrusted === true || TransferStorage.getInstance().isDeviceTrusted(id);
     const defaultDevName = platform === 'android'
       ? `${rawName} (Android Mobile App)`
-      : `${platform.toUpperCase()} Device • WebRTC Direct`;
+      : `${platform.toUpperCase()} Device â€¢ WebRTC Direct`;
     return {
       id,
       deviceId: id,
