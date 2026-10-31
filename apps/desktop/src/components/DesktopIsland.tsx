@@ -6,7 +6,7 @@
  * Displays interactive modal popup with Accept/Decline, verification SAS,
  * live transfer speed and progress.
  */
-import React, { useCallback, useEffect, useReducer, useRef } from 'react';
+import React, { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import type { PeerDevice, TransferProgressPayload, SelectedFileInfo } from '../types';
@@ -281,6 +281,7 @@ export const DesktopIsland: React.FC<{
   isOverlayWindow?: boolean;
 }> = ({ onOpenMain, onOpenChat, isOverlayWindow = false }) => {
   const [state, dispatch] = useReducer(islandReducer, initialState);
+  const [connectedPeers, setConnectedPeers] = useState<Record<string, boolean>>({});
   const timer = useRef<ReturnType<typeof setTimeout>>();
 
   const scheduleCollapse = useCallback((ms: number) => {
@@ -305,7 +306,7 @@ export const DesktopIsland: React.FC<{
   useEffect(() => {
     if (state.phase === 'completed') scheduleCollapse(7000);
     if (state.phase === 'failed') scheduleCollapse(9000);
-    if (state.phase === 'message') scheduleCollapse(6000);
+    if (state.phase === 'message') scheduleCollapse(14000);
     if (state.phase === 'discovering' && state.expanded) scheduleCollapse(7000);
   }, [state.phase, state.expanded, scheduleCollapse]);
 
@@ -395,12 +396,14 @@ export const DesktopIsland: React.FC<{
     ul.push(
       listen<any>('chat-message-received', (e) => {
         const p = e.payload;
-        if (p && !p.isOutgoing) {
+        if (p && !p.isOutgoing && !p.is_outgoing) {
+          // Immediately unhide and surface Desktop Island on incoming message
+          invoke('show_island_window').catch(() => {});
           dispatch({
             type: 'CHAT_MESSAGE',
-            senderName: p.senderName || p.peerName || 'Nearby Peer',
+            senderName: p.senderName || p.sender_name || p.peerName || 'Nearby Peer',
             text: p.text || '',
-            peerId: p.peerId || p.senderId || '',
+            peerId: p.peerId || p.peer_id || p.senderId || '',
           });
         }
       })
@@ -411,6 +414,17 @@ export const DesktopIsland: React.FC<{
       if (timer.current) clearTimeout(timer.current);
     };
   }, []);
+
+  // Connect to peer
+  const handleConnectPeer = async (peer: PeerDevice, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      if (peer.ip) {
+        await invoke('probe_device_ip', { ip: peer.ip });
+      }
+    } catch (_) {}
+    setConnectedPeers((prev) => ({ ...prev, [peer.id]: true }));
+  };
 
   // Send files directly to chosen peer over high-speed LAN
   const handleShareWithPeer = async (peer: PeerDevice, e?: React.MouseEvent) => {
@@ -762,26 +776,55 @@ export const DesktopIsland: React.FC<{
               </div>
             </div>
 
-            {/* Right: Rounded Square File Preview Thumbnail (48x48) */}
-            <div
-              style={{
-                width: 48,
-                height: 48,
-                borderRadius: 12,
-                background: 'rgba(255, 255, 255, 0.06)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                color: '#9CA3AF',
-                fontSize: 11,
-                fontWeight: 700,
-                textTransform: 'uppercase',
-              }}
-            >
-              {state.fileName ? state.fileName.split('.').pop()?.slice(0, 4) || 'FILE' : 'P2P'}
-            </div>
+            {/* Right: File Extension Badge or Minimal Collapse Control */}
+            {state.fileName ? (
+              <div
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 12,
+                  background: 'rgba(0, 122, 255, 0.12)',
+                  border: '1px solid rgba(0, 122, 255, 0.3)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  color: '#60A5FA',
+                  fontSize: 11,
+                  fontWeight: 800,
+                  textTransform: 'uppercase',
+                  letterSpacing: 0.5,
+                }}
+              >
+                {state.fileName.split('.').pop()?.slice(0, 4) || 'FILE'}
+              </div>
+            ) : (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  dispatch({ type: 'COLLAPSE' });
+                }}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: '#A1A1AA',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease',
+                }}
+                title="Collapse Island"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           {/* Nearby Discovered Members Section (Live peer cards with instant Share and Chat) */}
@@ -852,6 +895,8 @@ export const DesktopIsland: React.FC<{
                       ? '🐧'
                       : '📱';
 
+                    const isConnected = !!connectedPeers[peer.id] || peer.isOnline;
+
                     return (
                       <div
                         key={peer.id}
@@ -859,24 +904,25 @@ export const DesktopIsland: React.FC<{
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          padding: '8px 12px',
-                          borderRadius: 14,
-                          background: 'rgba(255, 255, 255, 0.06)',
+                          padding: '10px 14px',
+                          borderRadius: 16,
+                          background: 'rgba(255, 255, 255, 0.05)',
                           border: '1px solid rgba(255, 255, 255, 0.08)',
-                          gap: 10,
+                          gap: 12,
                         }}
                       >
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
                           <div
                             style={{
-                              width: 32,
-                              height: 32,
-                              borderRadius: 10,
-                              background: '#242426',
+                              width: 36,
+                              height: 36,
+                              borderRadius: 11,
+                              background: '#222225',
+                              border: '1px solid rgba(255, 255, 255, 0.08)',
                               display: 'flex',
                               alignItems: 'center',
                               justifyContent: 'center',
-                              fontSize: 16,
+                              fontSize: 17,
                               flexShrink: 0,
                             }}
                           >
@@ -885,7 +931,7 @@ export const DesktopIsland: React.FC<{
                           <div style={{ minWidth: 0, flex: 1 }}>
                             <div
                               style={{
-                                fontSize: 13,
+                                fontSize: 13.5,
                                 fontWeight: 700,
                                 color: '#FFFFFF',
                                 overflow: 'hidden',
@@ -895,62 +941,118 @@ export const DesktopIsland: React.FC<{
                             >
                               {peer.name || 'Nearby Device'}
                             </div>
-                            <div style={{ fontSize: 10.5, color: '#9CA3AF', marginTop: 1 }}>
-                              {peer.ip ? `${peer.ip} • Ready` : 'Direct LAN'}
+                            <div style={{ fontSize: 11, color: isConnected ? '#34D399' : '#9CA3AF', marginTop: 1, display: 'flex', alignItems: 'center', gap: 4 }}>
+                              <span style={{ width: 5, height: 5, borderRadius: '50%', background: isConnected ? '#10B981' : '#6B7280' }} />
+                              <span>{isConnected ? `Connected · ${peer.ip}` : `Ready · ${peer.ip}`}</span>
                             </div>
                           </div>
                         </div>
 
-                        {/* Direct action buttons: Share and Chat */}
+                        {/* Direct action buttons: Connect first or Share + Chat */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          <button
-                            onClick={(e) => handleShareWithPeer(peer, e)}
-                            title={`Send files to ${peer.name}`}
-                            style={{
-                              padding: '5px 11px',
-                              borderRadius: 9999,
-                              background: '#007AFF',
-                              border: 'none',
-                              color: '#FFFFFF',
-                              fontSize: 11.5,
-                              fontWeight: 700,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              boxShadow: '0 2px 8px rgba(0, 122, 255, 0.35)',
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <span>📎</span>
-                            <span>Share</span>
-                          </button>
-                          <button
-                            onClick={(e) => handleChatWithPeer(peer, e)}
-                            title={`Chat with ${peer.name}`}
-                            style={{
-                              padding: '5px 10px',
-                              borderRadius: 9999,
-                              background: 'rgba(255, 255, 255, 0.1)',
-                              border: '1px solid rgba(255, 255, 255, 0.12)',
-                              color: '#FFFFFF',
-                              fontSize: 11.5,
-                              fontWeight: 600,
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                            }}
-                          >
-                            <span>💬</span>
-                            <span>Chat</span>
-                          </button>
+                          {!isConnected ? (
+                            <button
+                              onClick={(e) => handleConnectPeer(peer, e)}
+                              title={`Connect with ${peer.name}`}
+                              style={{
+                                padding: '6px 14px',
+                                borderRadius: 9999,
+                                background: '#007AFF',
+                                border: 'none',
+                                color: '#FFFFFF',
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 5,
+                                boxShadow: '0 2px 10px rgba(0, 122, 255, 0.4)',
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <span>⚡</span>
+                              <span>Connect</span>
+                            </button>
+                          ) : (
+                            <>
+                              <button
+                                onClick={(e) => handleShareWithPeer(peer, e)}
+                                title={`Send files to ${peer.name}`}
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 9999,
+                                  background: '#007AFF',
+                                  border: 'none',
+                                  color: '#FFFFFF',
+                                  fontSize: 12,
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  boxShadow: '0 2px 8px rgba(0, 122, 255, 0.35)',
+                                  transition: 'all 0.15s ease',
+                                }}
+                              >
+                                <span>📎</span>
+                                <span>Share</span>
+                              </button>
+                              <button
+                                onClick={(e) => handleChatWithPeer(peer, e)}
+                                title={`Chat with ${peer.name}`}
+                                style={{
+                                  padding: '6px 11px',
+                                  borderRadius: 9999,
+                                  background: 'rgba(255, 255, 255, 0.09)',
+                                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                                  color: '#FFFFFF',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                <span>💬</span>
+                                <span>Chat</span>
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Middle: Incoming Chat Message Preview */}
+          {state.phase === 'message' && (
+            <div style={{ marginTop: 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div
+                style={{
+                  padding: '14px 16px',
+                  borderRadius: 16,
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 16 }}>💬</span>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: '#38BDF8' }}>
+                    {state.chatSender || 'Nearby Device'}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#9CA3AF' }}>• Direct LAN</span>
+                </div>
+                <div style={{ fontSize: 14, color: '#FFFFFF', fontWeight: 500, lineHeight: 1.45, wordBreak: 'break-word' }}>
+                  {state.chatText}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1106,68 +1208,64 @@ export const DesktopIsland: React.FC<{
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    dispatch({ type: 'DISMISS' });
+                    dispatch({ type: 'COLLAPSE' });
                   }}
                   style={{
                     flex: 1,
-                    height: 40,
+                    height: 38,
                     borderRadius: 9999,
-                    background: '#2C2C2E',
+                    background: '#242426',
                     border: '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#FFFFFF',
-                    fontSize: 14,
-                    fontWeight: 700,
+                    color: '#D1D5DB',
+                    fontSize: 13,
+                    fontWeight: 600,
                     cursor: 'pointer',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  Dismiss
+                  Collapse
                 </button>
-                {state.peerName && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onOpenChat && state.chatPeerId) {
-                        onOpenChat(state.chatPeerId);
-                      } else {
-                        onOpenMain();
-                      }
-                      dispatch({ type: 'DISMISS' });
-                    }}
-                    style={{
-                      flex: 1,
-                      height: 40,
-                      borderRadius: 9999,
-                      background: '#2C2C2E',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      color: '#FFFFFF',
-                      fontSize: 14,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Chat
-                  </button>
-                )}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRescan(e);
+                  }}
+                  style={{
+                    flex: 1,
+                    height: 38,
+                    borderRadius: 9999,
+                    background: '#242426',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#38BDF8',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  ↻ Rescan
+                </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     onOpenMain();
-                    dispatch({ type: 'DISMISS' });
+                    dispatch({ type: 'COLLAPSE' });
                   }}
                   style={{
                     flex: 1.2,
-                    height: 40,
+                    height: 38,
                     borderRadius: 9999,
                     background: '#007AFF',
                     border: 'none',
                     color: '#FFFFFF',
-                    fontSize: 14,
+                    fontSize: 13,
                     fontWeight: 700,
                     cursor: 'pointer',
-                    boxShadow: '0 4px 16px rgba(0, 122, 255, 0.45)',
+                    boxShadow: '0 4px 14px rgba(0, 122, 255, 0.35)',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  Share Files
+                  Open App
                 </button>
               </>
             )}

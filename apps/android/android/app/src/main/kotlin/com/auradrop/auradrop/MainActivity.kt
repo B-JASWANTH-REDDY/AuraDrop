@@ -4484,16 +4484,20 @@ class MainActivity : FlutterActivity() {
                 description = "Shows actionable notifications when nearby devices request to share files"
                 enableVibration(true)
                 setShowBadge(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                setBypassDnd(true)
             }
             nm.createNotificationChannel(reqChannel)
 
             val chatChannel = NotificationChannel(
                 CHAT_NOTIFICATION_CHANNEL_ID,
                 "Chat Messages",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Notifies when new messages arrive from nearby peers"
                 setShowBadge(true)
+                enableVibration(true)
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
             nm.createNotificationChannel(chatChannel)
         }

@@ -310,10 +310,12 @@ impl IdentityManager {
         let store = self.trust_store.read().await;
         if let Some(trusted_pub) = store.trusted_peers.get(peer_id) {
             if trusted_pub != peer_pub_hex {
-                return Err(format!(
-                    "Cryptographic identity mismatch! Peer {} presented public key {} but was previously trusted as {}. Potential MitM / impersonation attack detected.",
-                    peer_id, peer_pub_hex, trusted_pub
+                crate::log_debug(&format!(
+                    "[Identity] Peer {} public key rotated from {} to {}. Re-verifying peer via user consent.",
+                    peer_id, trusted_pub, peer_pub_hex
                 ));
+                // Rotated key must prompt user for explicit interactive Accept/Decline (treated as first contact)
+                return Ok(true);
             }
             Ok(false) // Known, trusted peer
         } else {
@@ -420,9 +422,9 @@ mod tests {
         let is_subsequent = id_manager.check_peer_trust_status(peer_id, peer_pub).await.unwrap();
         assert!(!is_subsequent, "Subsequent connection must not be first contact");
 
-        // 4. Attacker attempts to replace peer's public key (MitM / key substitution)
-        let attacker_pub = "04ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let tamper_result = id_manager.check_peer_trust_status(peer_id, attacker_pub).await;
-        assert!(tamper_result.is_err(), "Key replacement attack must be rejected by trust store");
+        // 4. Peer rotates key or renews identity: must require interactive re-verification
+        let rotated_pub = "04ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let re_verify = id_manager.check_peer_trust_status(peer_id, rotated_pub).await.unwrap();
+        assert!(re_verify, "Key rotation must require re-verification via user consent");
     }
 }
