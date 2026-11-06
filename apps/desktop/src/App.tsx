@@ -92,6 +92,27 @@ export const App: React.FC = () => {
       }
     });
 
+    // 4b. Listen for Incoming Share Request (surfaces Accept/Decline modal in main window)
+    const unlistenIncomingShare = listen<any>('incoming-share', (event) => {
+      const p = event.payload;
+      if (p) {
+        setActiveTransfer({
+          transferId: p.transferId || p.requestId || '',
+          fileName: p.fileName || p.firstFileName || 'Incoming File',
+          fileSize: p.fileSize || p.totalBytes || 0,
+          bytesTransferred: 0,
+          progressPercent: 0,
+          speedMbps: 0,
+          etaSeconds: 0,
+          isIncoming: true,
+          status: 'awaiting_verification',
+          peerName: p.senderName || p.peerName || 'Nearby Device',
+          filePath: undefined,
+          sasCode: p.sasCode,
+        });
+      }
+    });
+
     // 5. Listen for open-chat-peer event from floating island
     const unlistenOpenChat = listen<string>('open-chat-peer', (event) => {
       const peerId = event.payload;
@@ -134,6 +155,7 @@ export const App: React.FC = () => {
     return () => {
       unlistenPeers.then((fn) => fn());
       unlistenTransfer.then((fn) => fn());
+      unlistenIncomingShare.then((fn) => fn());
       unlistenOpenChat.then((fn) => fn());
       unlistenChat.then((fn) => fn());
     };

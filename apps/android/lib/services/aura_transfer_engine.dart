@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import '../models/models.dart';
@@ -124,9 +125,9 @@ class AuraTransferEngine {
 
     debugPrint('[AuraTransfer] Preparing transfer of $fileName ($resolvedFileSize bytes) to ${target.name} (${target.ip}:${target.port})');
 
-    // 1. Calculate SHA-256 (only precompute for <= 20MB to prevent multi-minute freezes on large files)
+    // 1. Calculate SHA-256 (only precompute for small files <= 5MB to prevent multi-minute freezes on large files)
     String expectedSha = '';
-    if (resolvedFileSize <= 20 * 1024 * 1024) {
+    if (resolvedFileSize <= 5 * 1024 * 1024) {
       _progressController.add(TransferProgressInfo(
         transferId: transferId,
         fileName: fileName,
@@ -248,9 +249,12 @@ class AuraTransferEngine {
       final stopwatch = Stopwatch()..start();
       int lastEmit = 0;
 
-      // Stream file directly into HTTP socket via 2MB chunk buffer for max LAN throughput
+      // Stream file directly into HTTP socket via 4MB Turbo Chunk Buffer with on-the-fly streaming SHA-256
       final raf = await localFile.open(mode: FileMode.read);
-      const bufferSize = 2 * 1024 * 1024; // 2MB Turbo Buffer
+      const bufferSize = 4 * 1024 * 1024; // 4MB Turbo Buffer for line-rate LAN throughput
+      final outputDigest = AccumulatorSink<Digest>();
+      final hashSink = sha256.startChunkedConversion(outputDigest);
+
       try {
         while (bytesSent < resolvedFileSize) {
           if (_isCancelled) {
@@ -262,6 +266,7 @@ class AuraTransferEngine {
           if (chunk.isEmpty) break;
 
           uploadReq.add(chunk);
+          hashSink.add(chunk);
           bytesSent += chunk.length;
 
           final nowMs = stopwatch.elapsedMilliseconds;
@@ -290,6 +295,9 @@ class AuraTransferEngine {
         await raf.close();
       }
 
+      hashSink.close();
+      final calculatedSenderSha = outputDigest.events.isNotEmpty ? outputDigest.events.single.toString() : '';
+
       final uploadResp = await uploadReq.close();
       _activeSendRequest = null;
 
@@ -305,8 +313,9 @@ class AuraTransferEngine {
           return false;
         }
 
-        if (receiverSha.isNotEmpty && receiverSha.toLowerCase() != expectedSha.toLowerCase()) {
-          _errorController.add('Receiver integrity verification mismatch: expected $expectedSha, got $receiverSha');
+        final shaToMatch = expectedSha.isNotEmpty ? expectedSha : calculatedSenderSha;
+        if (receiverSha.isNotEmpty && shaToMatch.isNotEmpty && receiverSha.toLowerCase() != shaToMatch.toLowerCase()) {
+          _errorController.add('Receiver integrity verification mismatch: expected $shaToMatch, got $receiverSha');
           return false;
         }
 
@@ -314,7 +323,7 @@ class AuraTransferEngine {
           'transferId': transferId,
           'fileName': fileName,
           'fileSize': resolvedFileSize,
-          'sha256': expectedSha,
+          'sha256': shaToMatch,
           'verified': true,
           'isSender': true,
         });

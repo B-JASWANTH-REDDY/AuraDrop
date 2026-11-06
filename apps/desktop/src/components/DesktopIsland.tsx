@@ -420,7 +420,7 @@ export const DesktopIsland: React.FC<{
     e.stopPropagation();
     try {
       if (peer.ip) {
-        await invoke('probe_device_ip', { ip: peer.ip });
+        await invoke('connect_to_peer', { peerId: peer.id, peerIp: peer.ip });
       }
     } catch (_) {}
     setConnectedPeers((prev) => ({ ...prev, [peer.id]: true }));

@@ -625,11 +625,11 @@ class AuraLanServer {
       return;
     }
 
-    // Validate SHA-256 format (required 64-character hex)
-    final sha256Expected = data['sha256']?.toString() ?? '';
-    if (sha256Expected.isEmpty || !_sha256Regex.hasMatch(sha256Expected)) {
+    // Validate SHA-256 format if provided (64-character hex string; or empty for on-the-fly streaming hash)
+    final sha256Expected = (data['sha256']?.toString() ?? '').trim();
+    if (sha256Expected.isNotEmpty && !_sha256Regex.hasMatch(sha256Expected)) {
       request.response.statusCode = HttpStatus.badRequest;
-      request.response.write(jsonEncode({'error': 'Invalid or missing sha256 format (64-character hex required)'}));
+      request.response.write(jsonEncode({'error': 'Invalid sha256 format (must be 64-character hex if provided)'}));
       await request.response.close();
       return;
     }
@@ -795,8 +795,12 @@ class AuraLanServer {
 
     _activePartFile = partFile;
     _activeTransferId = transferId;
-    final sink = partFile.openWrite(mode: FileMode.writeOnly);
-    _activeUploadSink = sink;
+    final raf = await partFile.open(mode: FileMode.writeOnly);
+    if (fileSize > 0) {
+      try {
+        await raf.truncate(fileSize); // Pre-allocate contiguous flash memory upfront for maximum I/O speed
+      } catch (_) {}
+    }
 
     final outputDigest = AccumulatorSink<Digest>();
     final hashSink = sha256.startChunkedConversion(outputDigest);
@@ -807,7 +811,7 @@ class AuraLanServer {
 
     try {
       await for (final chunk in request) {
-        sink.add(chunk);
+        await raf.writeFrom(chunk);
         hashSink.add(chunk);
         transferredBytes += chunk.length;
 
@@ -833,8 +837,8 @@ class AuraLanServer {
         }
       }
 
-      await sink.flush();
-      await sink.close();
+      await raf.flush();
+      await raf.close();
       hashSink.close();
       _activeUploadSink = null;
 
@@ -854,8 +858,8 @@ class AuraLanServer {
         return;
       }
 
-      // Verify SHA-256 checksum (mandatory for all files)
-      if (expectedSha.length != 64 || calculatedSha.toLowerCase() != expectedSha.toLowerCase()) {
+      // Verify SHA-256 checksum if provided by sender (supports dynamic streaming verification when expectedSha is empty)
+      if (expectedSha.isNotEmpty && (expectedSha.length != 64 || calculatedSha.toLowerCase() != expectedSha.toLowerCase())) {
         if (await partFile.exists()) await partFile.delete();
         request.response.statusCode = HttpStatus.badRequest;
         request.response.headers.contentType = ContentType.json;
@@ -898,7 +902,9 @@ class AuraLanServer {
       }));
       await request.response.close();
     } catch (e) {
-      await sink.close();
+      try {
+        await raf.close();
+      } catch (_) {}
       _activeUploadSink = null;
       if (await partFile.exists()) {
         await partFile.delete();

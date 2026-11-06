@@ -309,7 +309,7 @@ impl IdentityManager {
     ) -> Result<bool, String> {
         let store = self.trust_store.read().await;
         if let Some(trusted_pub) = store.trusted_peers.get(peer_id) {
-            if trusted_pub != peer_pub_hex {
+            if !trusted_pub.is_empty() && !peer_pub_hex.is_empty() && trusted_pub != peer_pub_hex {
                 crate::log_debug(&format!(
                     "[Identity] Peer {} public key rotated from {} to {}. Re-verifying peer via user consent.",
                     peer_id, trusted_pub, peer_pub_hex

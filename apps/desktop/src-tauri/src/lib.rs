@@ -7,7 +7,7 @@ pub mod network;
 pub mod transfer;
 
 use commands::{
-    cancel_transfer, check_for_updates, confirm_transfer_verification, get_all_chat_conversations,
+    cancel_transfer, check_for_updates, confirm_transfer_verification, connect_to_peer, get_all_chat_conversations,
     get_chat_history, get_local_info, get_nearby_peers, open_chat_window, open_downloads_folder,
     open_file, open_url, pick_files, probe_device_ip, rescan_network, send_chat_message,
     send_files_to_peer, set_device_name, set_island_size, show_file_in_folder, show_main_window,
@@ -129,6 +129,7 @@ pub fn run() {
             open_downloads_folder,
             rescan_network,
             probe_device_ip,
+            connect_to_peer,
             send_chat_message,
             get_chat_history,
             get_all_chat_conversations,

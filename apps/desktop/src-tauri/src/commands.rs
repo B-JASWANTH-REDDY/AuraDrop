@@ -128,7 +128,19 @@ pub async fn rescan_network(state: State<'_, AppState>) -> Result<Vec<PeerDevice
 #[tauri::command]
 pub async fn probe_device_ip(ip: String, state: State<'_, AppState>) -> Result<PeerDevice, String> {
     crate::log_debug(&format!("[Commands] probe_device_ip invoked for: {}", ip));
-    state.discovery.probe_single_ip(&ip).await
+    let peer = state.discovery.probe_single_ip(&ip).await?;
+    if !peer.id.is_empty() {
+        let _ = state.identity.mark_peer_trusted(&peer.id, "").await;
+    }
+    Ok(peer)
+}
+
+#[tauri::command]
+pub async fn connect_to_peer(peer_id: String, peer_ip: String, state: State<'_, AppState>) -> Result<PeerDevice, String> {
+    crate::log_debug(&format!("[Commands] connect_to_peer invoked for: {} ({})", peer_id, peer_ip));
+    let peer = state.discovery.probe_single_ip(&peer_ip).await?;
+    let _ = state.identity.mark_peer_trusted(&peer_id, "").await;
+    Ok(peer)
 }
 
 #[tauri::command]
