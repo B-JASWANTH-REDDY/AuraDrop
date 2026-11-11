@@ -12,7 +12,7 @@ use commands::{
     open_file, open_url, pick_files, probe_device_ip, rescan_network, send_chat_message,
     send_files_to_peer, set_device_name, set_island_size, show_file_in_folder, show_main_window,
     hide_island_window, show_island_window, dismiss_island_session, restore_island_session,
-    is_island_dismissed, AppState,
+    is_island_dismissed, get_active_transfer, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -154,7 +154,8 @@ pub fn run() {
             show_island_window,
             dismiss_island_session,
             restore_island_session,
-            is_island_dismissed
+            is_island_dismissed,
+            get_active_transfer
         ])
         .run(tauri::generate_context!());
 

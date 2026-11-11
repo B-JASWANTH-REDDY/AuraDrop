@@ -347,6 +347,8 @@ class AuraOverlayManager private constructor(private val context: Context) {
         }
     }
 
+    private var lastOverlayUpdateMs = 0L
+
     fun showOrUpdateTransferProgress(
         transferId: String,
         fileName: String,
@@ -367,7 +369,10 @@ class AuraOverlayManager private constructor(private val context: Context) {
 
             val view = currentOverlayView
             if (view != null && activeTransferId == transferId) {
-                // In-place update of ongoing transfer
+                // In-place update of ongoing transfer — throttle to 150ms to prevent UI jitter/flicker
+                val now = System.currentTimeMillis()
+                if (now - lastOverlayUpdateMs < 150L) return@post
+                lastOverlayUpdateMs = now
                 try {
                     val tvTitle = view.findViewById<TextView>(R.id.tv_title)
                     val tvSubtitle = view.findViewById<TextView>(R.id.tv_sender_subtitle)
@@ -403,9 +408,14 @@ class AuraOverlayManager private constructor(private val context: Context) {
                     Log.e(TAG, "Error updating overlay progress: ${e.message}")
                 }
             } else {
-                // New transfer progress overlay
+                // New transfer progress overlay — only dismiss prior overlay if it was a
+                // different type (e.g., NameDrop or chat), not an in-flight transfer for the
+                // same session. Avoids dismiss-then-appear flicker caused by calling
+                // dismissCurrentOverlay() before addView() on every new progress event.
                 activeTransferId = transferId
-                dismissCurrentOverlay()
+                if (currentOverlayView != null) {
+                    dismissCurrentOverlay()
+                }
 
                 try {
                     val inflater = LayoutInflater.from(context)

@@ -122,10 +122,15 @@ class TransferForegroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
+                // IMPORTANCE_DEFAULT ensures the notification is visible on lock screen
+                // and surfaced with a heads-up banner during active transfers
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Shows real-time status for high-speed file transfers"
-                setShowBadge(false)
+                setShowBadge(true)
+                enableVibration(false)
+                // VISIBILITY_PUBLIC makes the full notification content visible on lock screen
+                lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
@@ -144,8 +149,11 @@ class TransferForegroundService : Service() {
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setProgress(100, progress, progress == 0)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setContentIntent(pendingIntent)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            // PRIORITY_DEFAULT combined with VISIBILITY_PUBLIC ensures lock screen visibility
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .build()
     }
 

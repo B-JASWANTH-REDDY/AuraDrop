@@ -311,11 +311,13 @@ impl IdentityManager {
         if let Some(trusted_pub) = store.trusted_peers.get(peer_id) {
             if !trusted_pub.is_empty() && !peer_pub_hex.is_empty() && trusted_pub != peer_pub_hex {
                 crate::log_debug(&format!(
-                    "[Identity] Peer {} public key rotated from {} to {}. Re-verifying peer via user consent.",
+                    "[Identity] Peer {} public key rotated from {} to {}. Untrusted key substitution rejected.",
                     peer_id, trusted_pub, peer_pub_hex
                 ));
-                // Rotated key must prompt user for explicit interactive Accept/Decline (treated as first contact)
-                return Ok(true);
+                return Err(format!(
+                    "Peer {} public key substitution detected: trusted {} vs presented {}. Potential impersonation attack.",
+                    peer_id, trusted_pub, peer_pub_hex
+                ));
             }
             Ok(false) // Known, trusted peer
         } else {
@@ -422,9 +424,9 @@ mod tests {
         let is_subsequent = id_manager.check_peer_trust_status(peer_id, peer_pub).await.unwrap();
         assert!(!is_subsequent, "Subsequent connection must not be first contact");
 
-        // 4. Peer rotates key or renews identity: must require interactive re-verification
+        // 4. Peer rotates key or renews identity: untrusted key substitution must be rejected
         let rotated_pub = "04ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-        let re_verify = id_manager.check_peer_trust_status(peer_id, rotated_pub).await.unwrap();
-        assert!(re_verify, "Key rotation must require re-verification via user consent");
+        let attack_result = id_manager.check_peer_trust_status(peer_id, rotated_pub).await;
+        assert!(attack_result.is_err(), "Public key substitution must be rejected as potential impersonation attack");
     }
 }

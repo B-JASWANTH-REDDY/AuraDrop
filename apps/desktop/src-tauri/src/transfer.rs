@@ -2,6 +2,7 @@ use crate::identity::IdentityManager;
 use crate::models::{
     ChatMessage, PrepareUploadRequest, PrepareUploadResponse, TransferCheckpoint, TransferProgressPayload,
 };
+use bytes::BytesMut;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Query, State},
@@ -141,6 +142,9 @@ pub struct TransferService {
     pub pending_verifications: Arc<RwLock<HashMap<String, tokio::sync::oneshot::Sender<bool>>>>,
     app_handle: Option<AppHandle>,
     downloads_dir: PathBuf,
+    /// Last-emitted transfer progress snapshot — used by the island window to hydrate
+    /// state on startup if a transfer is already in progress when the overlay mounts.
+    pub last_transfer_snapshot: Arc<RwLock<Option<crate::models::TransferProgressPayload>>>,
 }
 
 impl TransferService {
@@ -158,6 +162,7 @@ impl TransferService {
             pending_verifications: Arc::new(RwLock::new(HashMap::new())),
             app_handle: None,
             downloads_dir: downloads,
+            last_transfer_snapshot: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -198,7 +203,26 @@ impl TransferService {
                 .with_state(service);
 
             crate::log_debug(&format!("[TransferServer] Attempting to bind TCP 0.0.0.0:{}", TRANSFER_PORT));
-            let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", TRANSFER_PORT)).await {
+            let listener = match (|| -> Result<tokio::net::TcpListener, Box<dyn std::error::Error + Send + Sync>> {
+                let socket = socket2::Socket::new(
+                    socket2::Domain::IPV4,
+                    socket2::Type::STREAM,
+                    Some(socket2::Protocol::TCP),
+                )?;
+                socket.set_reuse_address(true)?;
+                #[cfg(not(windows))]
+                let _ = socket.set_reuse_port(true);
+                // Tune TCP socket buffers to 2 MiB for Gigabit LAN and Wi-Fi 6 saturation
+                let _ = socket.set_send_buffer_size(2 * 1024 * 1024);
+                let _ = socket.set_recv_buffer_size(2 * 1024 * 1024);
+                let _ = socket.set_nodelay(true);
+                socket.set_nonblocking(true)?;
+                let addr: std::net::SocketAddr = format!("0.0.0.0:{}", TRANSFER_PORT).parse()?;
+                socket.bind(&addr.into())?;
+                socket.listen(1024)?;
+                let std_listener: std::net::TcpListener = socket.into();
+                Ok(tokio::net::TcpListener::from_std(std_listener)?)
+            })() {
                 Ok(l) => {
                     crate::log_debug(&format!("[TransferServer] Successfully bound TCP on 0.0.0.0:{}", TRANSFER_PORT));
                     l
@@ -240,23 +264,8 @@ impl TransferService {
         let my_name = self.identity.get_device_name().await;
         let transfer_id = Uuid::new_v4().to_string();
 
-        // Fast streaming SHA-256: for small files (<= 10MB) compute upfront; for large files compute on the fly while streaming chunks to eliminate multi-minute freezes and double disk reads
-        let precomputed_sha = if file_size <= 10 * 1024 * 1024 {
-            match File::open(&path) {
-                Ok(mut f) => {
-                    let mut hasher = Sha256::new();
-                    let mut buf = [0u8; 1024 * 1024];
-                    while let Ok(n) = f.read(&mut buf) {
-                        if n == 0 { break; }
-                        hasher.update(&buf[..n]);
-                    }
-                    hex::encode(hasher.finalize())
-                }
-                Err(_) => String::new(),
-            }
-        } else {
-            String::new()
-        };
+        // Fast streaming SHA-256: compute on the fly while streaming chunks to eliminate double disk reads
+        let precomputed_sha = String::new();
 
         // Emit initial status: awaiting recipient's Accept/Decline decision
         self.emit_progress(TransferProgressPayload {
@@ -279,6 +288,7 @@ impl TransferService {
 
         let client = Client::builder()
             .tcp_nodelay(true)
+            .tcp_keepalive(Some(std::time::Duration::from_secs(15)))
             .connect_timeout(std::time::Duration::from_secs(10))
             // 75s timeout: covers the 60s recipient consent window with 15s margin
             .timeout(std::time::Duration::from_secs(75))
@@ -691,6 +701,15 @@ impl TransferService {
     }
 
     async fn emit_progress(&self, payload: TransferProgressPayload) {
+        // Cache the latest snapshot so the island window can hydrate on mount
+        {
+            let mut snap = self.last_transfer_snapshot.write().await;
+            if payload.status == "completed" || payload.status == "failed" || payload.status == "cancelled" {
+                *snap = None; // Clear cache when transfer is over
+            } else {
+                *snap = Some(payload.clone());
+            }
+        }
         if let Some(ref handle) = self.app_handle {
             let _ = handle.emit("transfer-progress", &payload);
             if payload.status == "awaiting_verification" || (payload.is_incoming && payload.status == "transferring" && payload.bytes_transferred == 0) {
@@ -701,6 +720,11 @@ impl TransferService {
                 }
             }
         }
+    }
+
+    /// Return the latest in-progress transfer snapshot for island mount hydration.
+    pub async fn get_active_transfer(&self) -> Option<TransferProgressPayload> {
+        self.last_transfer_snapshot.read().await.clone()
     }
 
     async fn emit_error(
@@ -1446,7 +1470,7 @@ async fn handle_upload(
     let mut smoothed_speed = 0.0f64;
 
     let mut stream = body.into_data_stream();
-    let mut stream_buf = Vec::with_capacity(8 * 1024 * 1024);
+    let mut stream_buf = BytesMut::with_capacity(8 * 1024 * 1024);
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
@@ -1523,8 +1547,10 @@ async fn handle_upload(
                     break; // Await more network bytes to complete frame
                 }
 
+                let frame = stream_buf.split_to(total_frame_len);
+
                 let mut nonce = [0u8; 12];
-                nonce.copy_from_slice(&stream_buf[4..16]);
+                nonce.copy_from_slice(&frame[4..16]);
 
                 // Validate strict sequence numbering to prevent chunk replay, out-of-order, or repeated chunks
                 let chunk_seq = u64::from_be_bytes([
@@ -1541,7 +1567,7 @@ async fn handle_upload(
                     ));
                 }
 
-                let ciphertext_and_tag = &stream_buf[16..total_frame_len];
+                let ciphertext_and_tag = &frame[16..total_frame_len];
                 let aad = format!("{}:{}", session.transfer_id, chunk_index);
 
                 let plaintext = match crate::crypto::decrypt_chunk(
@@ -1588,8 +1614,6 @@ async fn handle_upload(
                 hasher.update(&plaintext);
                 transferred += plaintext.len() as u64;
                 chunk_index += 1;
-
-                stream_buf.drain(0..total_frame_len);
             }
         }
 

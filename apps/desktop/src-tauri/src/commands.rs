@@ -508,4 +508,12 @@ pub async fn is_island_dismissed(state: State<'_, AppState>) -> Result<bool, Str
     Ok(state.is_island_dismissed.load(std::sync::atomic::Ordering::SeqCst))
 }
 
+/// Returns the last-known in-flight transfer payload so the island window can
+/// hydrate its state when it mounts after a transfer event was already emitted.
+#[tauri::command]
+pub async fn get_active_transfer(
+    state: State<'_, AppState>,
+) -> Result<Option<crate::models::TransferProgressPayload>, String> {
+    Ok(state.transfer.get_active_transfer().await)
+}
 

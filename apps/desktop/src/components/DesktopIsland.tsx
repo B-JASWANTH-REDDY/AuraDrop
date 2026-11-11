@@ -379,6 +379,40 @@ export const DesktopIsland: React.FC<{
       })
       .catch(() => {});
 
+    // 1b. Hydrate active transfer state on mount — the island window may start
+    //     after a transfer-progress event was already emitted by the backend.
+    //     Polling get_active_transfer() ensures we never show a stale idle state.
+    invoke<any>('get_active_transfer')
+      .then((snapshot) => {
+        if (!snapshot) return;
+        const p = snapshot;
+        const transferred = p.bytesTransferred ?? p.bytes_transferred ?? p.transferredBytes ?? 0;
+        const total = p.fileSize ?? p.file_size ?? p.totalBytes ?? 0;
+        const speed = p.speedBytesPerSec ?? (p.speed_mbps ?? p.speedMbps ? Math.round((p.speed_mbps ?? p.speedMbps) * 1024 * 1024) : 0);
+        const normalized: Partial<TransferProgressPayload> = {
+          ...p,
+          bytesTransferred: transferred,
+          fileSize: total,
+          speedBytesPerSec: speed,
+          isIncoming: p.isIncoming ?? p.is_incoming ?? false,
+        };
+        const status = (p.status ?? '').toLowerCase();
+        if (status === 'awaiting_approval' || status === 'awaiting_verification') {
+          dispatch({ type: 'RESTORE_SESSION' });
+          dispatch({ type: 'TRANSFER_REQUEST', payload: normalized });
+        } else if (status === 'transferring' || status === 'sending' || status === 'receiving') {
+          dispatch({ type: 'RESTORE_SESSION' });
+          if (transferred === 0) {
+            dispatch({ type: 'TRANSFER_START', payload: normalized });
+          } else {
+            dispatch({ type: 'TRANSFER_PROGRESS', payload: normalized });
+          }
+        } else if (status === 'verifying') {
+          dispatch({ type: 'TRANSFER_VERIFYING', payload: normalized });
+        }
+      })
+      .catch(() => {});
+
     const ul: Promise<() => void>[] = [];
 
     // 2. Peer updates listener

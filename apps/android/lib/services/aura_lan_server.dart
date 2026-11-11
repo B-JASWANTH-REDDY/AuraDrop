@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:convert/convert.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -809,11 +810,20 @@ class AuraLanServer {
     final stopwatch = Stopwatch()..start();
     int lastEmitTime = 0;
 
+    // Buffer incoming network chunks in memory before flushing to disk
+    // to prevent tens of thousands of async writeFrom context switches on 1.4KB MTU packets
+    const int diskWriteBufferSize = 512 * 1024; // 512 KB buffer
+    final diskBuffer = BytesBuilder(copy: false);
+
     try {
       await for (final chunk in request) {
-        await raf.writeFrom(chunk);
+        diskBuffer.add(chunk);
         hashSink.add(chunk);
         transferredBytes += chunk.length;
+
+        if (diskBuffer.length >= diskWriteBufferSize) {
+          await raf.writeFrom(diskBuffer.takeBytes());
+        }
 
         final nowMs = stopwatch.elapsedMilliseconds;
         if (nowMs - lastEmitTime >= 200 || transferredBytes == fileSize) {
@@ -835,6 +845,10 @@ class AuraLanServer {
           ));
           lastEmitTime = nowMs;
         }
+      }
+
+      if (diskBuffer.isNotEmpty) {
+        await raf.writeFrom(diskBuffer.takeBytes());
       }
 
       await raf.flush();
