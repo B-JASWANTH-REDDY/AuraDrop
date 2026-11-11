@@ -45,6 +45,13 @@ export const App: React.FC = () => {
   const [isPickingFiles, setIsPickingFiles] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [incomingChatToast, setIncomingChatToast] = useState<{ senderName: string; text: string; peerId: string } | null>(null);
+  const [isIslandDismissed, setIsIslandDismissed] = useState<boolean>(() => {
+    try {
+      return typeof window !== 'undefined' && window.sessionStorage?.getItem('auradrop_island_dismissed') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Initialize Local Info and Listeners
   useEffect(() => {
@@ -152,24 +159,74 @@ export const App: React.FC = () => {
       }
     });
 
+    // 7. Query and listen for dynamic island session dismissal changes
+    invoke<boolean>('is_island_dismissed')
+      .then((dismissed) => {
+        setIsIslandDismissed(Boolean(dismissed));
+      })
+      .catch(() => {});
+
+    const unlistenDismiss = listen<boolean>('island-dismissed-changed', (event) => {
+      setIsIslandDismissed(Boolean(event.payload));
+      try {
+        if (event.payload) {
+          sessionStorage.setItem('auradrop_island_dismissed', 'true');
+        } else {
+          sessionStorage.removeItem('auradrop_island_dismissed');
+        }
+      } catch (_) {}
+    });
+
     return () => {
       unlistenPeers.then((fn) => fn());
       unlistenTransfer.then((fn) => fn());
       unlistenIncomingShare.then((fn) => fn());
       unlistenOpenChat.then((fn) => fn());
       unlistenChat.then((fn) => fn());
+      unlistenDismiss.then((fn) => fn());
     };
   }, []);
 
-  // Ensure Floating Island Window is visible
+  // Ensure Floating Island Window is visible on initial load if not dismissed
   useEffect(() => {
     try {
       const win = getCurrentWebviewWindow();
       if (win && win.label !== 'main') return;
     } catch (_) {}
 
-    invoke('show_island_window').catch(() => {});
+    const isDismissed = sessionStorage.getItem('auradrop_island_dismissed') === 'true';
+    if (!isDismissed) {
+      invoke('show_island_window').catch(() => {});
+    }
   }, []);
+
+  const handleToggleIsland = async () => {
+    if (isIslandDismissed) {
+      try {
+        await invoke('restore_island_session');
+      } catch (_) {
+        try {
+          await invoke('show_island_window');
+        } catch (_) {}
+      }
+      try {
+        sessionStorage.removeItem('auradrop_island_dismissed');
+      } catch (_) {}
+      setIsIslandDismissed(false);
+    } else {
+      try {
+        await invoke('dismiss_island_session');
+      } catch (_) {
+        try {
+          await invoke('hide_island_window');
+        } catch (_) {}
+      }
+      try {
+        sessionStorage.setItem('auradrop_island_dismissed', 'true');
+      } catch (_) {}
+      setIsIslandDismissed(true);
+    }
+  };
 
   // Action: Select Peer
   const handleSelectPeer = (peer: PeerDevice) => {
@@ -317,6 +374,20 @@ export const App: React.FC = () => {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-white' : 'text-neutral-400'}`} />
             <span className="hidden md:inline">{isScanning ? 'Scanning...' : 'Scan Subnet'}</span>
+          </button>
+
+          {/* Dynamic Island Session Status & Restore Toggle */}
+          <button
+            onClick={handleToggleIsland}
+            title={isIslandDismissed ? "Restore Dynamic Island (Island currently dismissed for session)" : "Dynamic Island Active (Click to dismiss for session)"}
+            aria-label={isIslandDismissed ? "Restore Dynamic Island" : "Dismiss Dynamic Island"}
+            className="px-2.5 py-1.5 rounded-lg border border-white/15 bg-white/5 hover:bg-white/10 text-white text-xs font-medium flex items-center gap-1.5 transition-all active:scale-95"
+          >
+            <span className={`w-2 h-2 rounded-full ${isIslandDismissed ? 'bg-neutral-500' : 'bg-emerald-400 animate-pulse'}`} />
+            <span className="hidden md:inline">Dynamic Island</span>
+            {isIslandDismissed && (
+              <span className="text-[10px] text-neutral-400 font-mono">(Off)</span>
+            )}
           </button>
 
           {/* Direct IP Quick Connect Button */}

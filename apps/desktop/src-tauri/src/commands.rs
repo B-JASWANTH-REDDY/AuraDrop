@@ -10,6 +10,7 @@ pub struct AppState {
     pub identity: IdentityManager,
     pub discovery: DiscoveryService,
     pub transfer: TransferService,
+    pub is_island_dismissed: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[tauri::command]
@@ -463,19 +464,48 @@ pub async fn set_island_size(app: tauri::AppHandle, width: f64, height: f64) -> 
 }
 
 #[tauri::command]
-pub async fn hide_island_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn hide_island_window(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.is_island_dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
     if let Some(island) = app.get_webview_window("island") {
         let _ = island.hide();
     }
+    let _ = app.emit("island-dismissed-changed", true);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn show_island_window(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn show_island_window(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.is_island_dismissed.store(false, std::sync::atomic::Ordering::SeqCst);
     if let Some(island) = app.get_webview_window("island") {
         let _ = island.show();
     }
+    let _ = app.emit("island-dismissed-changed", false);
     Ok(())
+}
+
+#[tauri::command]
+pub async fn dismiss_island_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.is_island_dismissed.store(true, std::sync::atomic::Ordering::SeqCst);
+    if let Some(island) = app.get_webview_window("island") {
+        let _ = island.hide();
+    }
+    let _ = app.emit("island-dismissed-changed", true);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn restore_island_session(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.is_island_dismissed.store(false, std::sync::atomic::Ordering::SeqCst);
+    if let Some(island) = app.get_webview_window("island") {
+        let _ = island.show();
+    }
+    let _ = app.emit("island-dismissed-changed", false);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn is_island_dismissed(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.is_island_dismissed.load(std::sync::atomic::Ordering::SeqCst))
 }
 
 

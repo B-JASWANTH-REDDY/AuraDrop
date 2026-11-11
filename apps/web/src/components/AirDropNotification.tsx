@@ -16,6 +16,7 @@ export interface AirDropNotificationProps {
   onCancel?: () => void;
   transferProgress?: TransferProgress | null;
   onDone?: () => void;
+  onClose?: () => void;
 }
 
 /**
@@ -42,12 +43,15 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
   onCancel,
   transferProgress,
   onDone,
+  onClose,
 }) => {
   const [isRendered, setIsRendered] = useState(isOpen);
   const [isAnimatingIn, setIsAnimatingIn] = useState(false);
+  const [isDismissed, setIsDismissed] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
+      setIsDismissed(false);
       setIsRendered(true);
       requestAnimationFrame(() => {
         setIsAnimatingIn(true);
@@ -59,7 +63,20 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
     }
   }, [isOpen]);
 
-  if (!isRendered) return null;
+  const handleDismiss = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setIsAnimatingIn(false);
+    setIsDismissed(true);
+    if (onClose) {
+      onClose();
+    } else if (onCancel) {
+      onCancel();
+    } else {
+      setTimeout(() => setIsRendered(false), 380);
+    }
+  };
+
+  if (!isRendered || isDismissed) return null;
 
   const activePeerName = propPeerName || senderName || 'Nearby Device';
   const currentState = (transferProgress?.state || '').toUpperCase();
@@ -274,49 +291,87 @@ export const AirDropNotification: React.FC<AirDropNotificationProps> = ({
             </div>
           </div>
 
-          {/* Right: Rounded Square Photo / File Preview Thumbnail */}
-          <div
-            style={{
-              width: '56px',
-              height: '56px',
-              borderRadius: '16px',
-              background: '#1A1A1E',
-              border: '1px solid #28282D',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              overflow: 'hidden',
-              boxShadow: 'inset 0 0 10px rgba(0, 0, 0, 0.6)',
-            }}
-          >
-            {previewUrl ? (
-              <img
-                src={previewUrl}
-                alt="preview"
-                style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-              />
-            ) : (
-              <div
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  background: isIncoming
-                    ? 'linear-gradient(135deg, #1C3048 0%, #0E1B2A 100%)'
-                    : 'linear-gradient(135deg, #1C402E 0%, #0E2218 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-              >
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={isIncoming ? '#5AC8FA' : '#34C759'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                  <line x1="12" y1="18" x2="12" y2="12" />
-                  <line x1="9" y1="15" x2="15" y2="15" />
-                </svg>
-              </div>
-            )}
+          {/* Right: Rounded Square Photo / File Preview Thumbnail + Close ('X') Dismiss Button */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            <div
+              style={{
+                width: '56px',
+                height: '56px',
+                borderRadius: '16px',
+                background: '#1A1A1E',
+                border: '1px solid #28282D',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                overflow: 'hidden',
+                boxShadow: 'inset 0 0 10px rgba(0, 0, 0, 0.6)',
+              }}
+            >
+              {previewUrl ? (
+                <img
+                  src={previewUrl}
+                  alt="preview"
+                  style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    background: isIncoming
+                      ? 'linear-gradient(135deg, #1C3048 0%, #0E1B2A 100%)'
+                      : 'linear-gradient(135deg, #1C402E 0%, #0E2218 100%)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={isIncoming ? '#5AC8FA' : '#34C759'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                    <polyline points="14 2 14 8 20 8" />
+                    <line x1="12" y1="18" x2="12" y2="12" />
+                    <line x1="9" y1="15" x2="15" y2="15" />
+                  </svg>
+                </div>
+              )}
+            </div>
+
+            {/* Web Dynamic Island Close ('X') Button */}
+            <button
+              onClick={handleDismiss}
+              title="Dismiss Notification"
+              aria-label="Dismiss Dynamic Island"
+              className="airdrop-close-btn"
+              style={{
+                width: '28px',
+                height: '28px',
+                borderRadius: '50%',
+                background: 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid rgba(255, 255, 255, 0.15)',
+                color: '#A0A0A5',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+                lineHeight: 1,
+                cursor: 'pointer',
+                flexShrink: 0,
+                transition: 'all 0.18s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(239, 68, 68, 0.25)';
+                e.currentTarget.style.color = '#EF4444';
+                e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                e.currentTarget.style.color = '#A0A0A5';
+                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.15)';
+              }}
+            >
+              ✕
+            </button>
           </div>
         </div>
 

@@ -11,7 +11,8 @@ use commands::{
     get_chat_history, get_local_info, get_nearby_peers, open_chat_window, open_downloads_folder,
     open_file, open_url, pick_files, probe_device_ip, rescan_network, send_chat_message,
     send_files_to_peer, set_device_name, set_island_size, show_file_in_folder, show_main_window,
-    hide_island_window, show_island_window, AppState,
+    hide_island_window, show_island_window, dismiss_island_session, restore_island_session,
+    is_island_dismissed, AppState,
 };
 use discovery::DiscoveryService;
 use identity::IdentityManager;
@@ -79,10 +80,14 @@ pub fn run() {
                     let _ = island.show();
                 }
 
+                let is_island_dismissed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
                 // Native window focus/blur/close handlers: Auto-hide island when main window has focus;
-                // keep island active 24/7 when main window loses focus or is closed/minimized!
+                // keep island active 24/7 when main window loses focus or is closed/minimized,
+                // BUT respect session dismissal so blur events do not forcefully un-hide a dismissed island!
                 if let Some(main) = app.get_webview_window("main") {
                     let app_handle = handle.clone();
+                    let island_dismissed_flag = is_island_dismissed.clone();
                     main.on_window_event(move |event| {
                         match event {
                             tauri::WindowEvent::Focused(focused) => {
@@ -90,7 +95,9 @@ pub fn run() {
                                     if *focused {
                                         let _ = island.hide();
                                     } else {
-                                        let _ = island.show();
+                                        if !island_dismissed_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                            let _ = island.show();
+                                        }
                                     }
                                 }
                             }
@@ -100,7 +107,9 @@ pub fn run() {
                                     let _ = main_win.hide();
                                 }
                                 if let Some(island) = app_handle.get_webview_window("island") {
-                                    let _ = island.show();
+                                    if !island_dismissed_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                        let _ = island.show();
+                                    }
                                 }
                             }
                             _ => {}
@@ -112,6 +121,7 @@ pub fn run() {
                     identity,
                     discovery: d,
                     transfer: t,
+                    is_island_dismissed,
                 });
                 log_debug("setup() complete");
 
@@ -141,7 +151,10 @@ pub fn run() {
             open_chat_window,
             set_island_size,
             hide_island_window,
-            show_island_window
+            show_island_window,
+            dismiss_island_session,
+            restore_island_session,
+            is_island_dismissed
         ])
         .run(tauri::generate_context!());
 

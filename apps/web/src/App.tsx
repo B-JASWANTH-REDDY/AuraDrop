@@ -475,6 +475,10 @@ export const App: React.FC = () => {
         onAccept={handleAcceptDemo}
         onDecline={handleDeclineDemo}
         onCancel={handleDeclineDemo}
+        onClose={() => {
+          setActiveTransfer(null);
+          setIncomingAirDrop(null);
+        }}
         onDone={() => {
           setActiveTransfer(null);
           setIncomingAirDrop(null);

@@ -41,6 +41,7 @@ interface IslandState {
   chatSender: string;
   chatText: string;
   chatPeerId: string;
+  isDismissed: boolean;
 }
 
 type IslandAction =
@@ -55,7 +56,13 @@ type IslandAction =
   | { type: 'CHAT_MESSAGE'; senderName: string; text: string; peerId: string }
   | { type: 'EXPAND' }
   | { type: 'COLLAPSE' }
-  | { type: 'DISMISS' };
+  | { type: 'DISMISS' }
+  | { type: 'DISMISS_SESSION' }
+  | { type: 'RESTORE_SESSION' };
+
+const isSessionDismissed =
+  typeof window !== 'undefined' &&
+  window.sessionStorage?.getItem('auradrop_island_dismissed') === 'true';
 
 const initialState: IslandState = {
   phase: 'idle',
@@ -76,6 +83,7 @@ const initialState: IslandState = {
   chatSender: '',
   chatText: '',
   chatPeerId: '',
+  isDismissed: isSessionDismissed,
 };
 
 function islandReducer(state: IslandState, action: IslandAction): IslandState {
@@ -106,6 +114,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         ...state,
         phase: 'waiting_approval',
         expanded: true,
+        isDismissed: false,
         transferId: p.transferId || state.transferId,
         fileName: p.fileName || state.fileName || (isInc ? 'Incoming File' : 'Transferring File'),
         filePath: p.filePath || '',
@@ -128,6 +137,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         ...state,
         phase: 'transferring',
         expanded: true,
+        isDismissed: false,
         transferId: p.transferId || state.transferId,
         fileName: p.fileName || state.fileName || 'Transferring File',
         filePath: p.filePath || '',
@@ -149,6 +159,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
       return {
         ...state,
         phase: 'transferring',
+        isDismissed: false,
         transferredBytes: transferred,
         fileSizeBytes: total > 0 ? total : state.fileSizeBytes,
         speedBytesPerSec: speed,
@@ -165,6 +176,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         ...state,
         phase: 'verifying',
         expanded: true,
+        isDismissed: false,
         transferredBytes: total,
         fileSizeBytes: total,
         speedBytesPerSec: 0,
@@ -181,6 +193,7 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         ...state,
         phase: 'completed',
         expanded: true,
+        isDismissed: false,
         transferredBytes: total,
         fileSizeBytes: total,
         filePath: p.filePath || state.filePath,
@@ -234,6 +247,19 @@ function islandReducer(state: IslandState, action: IslandAction): IslandState {
         errorMessage: '',
       };
 
+    case 'DISMISS_SESSION':
+      return {
+        ...state,
+        isDismissed: true,
+        expanded: false,
+      };
+
+    case 'RESTORE_SESSION':
+      return {
+        ...state,
+        isDismissed: false,
+      };
+
     default:
       return state;
   }
@@ -283,6 +309,39 @@ export const DesktopIsland: React.FC<{
   const [state, dispatch] = useReducer(islandReducer, initialState);
   const [connectedPeers, setConnectedPeers] = useState<Record<string, boolean>>({});
   const timer = useRef<ReturnType<typeof setTimeout>>();
+
+  const handleDismissForSession = useCallback(async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.setItem('auradrop_island_dismissed', 'true');
+      }
+    } catch (_) {}
+    dispatch({ type: 'DISMISS_SESSION' });
+    try {
+      await invoke('dismiss_island_session');
+    } catch (_) {
+      try {
+        await invoke('hide_island_window');
+      } catch (_) {}
+    }
+  }, []);
+
+  const handleRestoreSession = useCallback(async () => {
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        window.sessionStorage.removeItem('auradrop_island_dismissed');
+      }
+    } catch (_) {}
+    dispatch({ type: 'RESTORE_SESSION' });
+    try {
+      await invoke('restore_island_session');
+    } catch (_) {
+      try {
+        await invoke('show_island_window');
+      } catch (_) {}
+    }
+  }, []);
 
   const scheduleCollapse = useCallback((ms: number) => {
     if (timer.current) clearTimeout(timer.current);
@@ -353,10 +412,28 @@ export const DesktopIsland: React.FC<{
         };
 
         if (p.status === 'awaiting_verification' || p.status === 'awaiting_approval') {
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem('auradrop_island_dismissed');
+            }
+          } catch (_) {}
+          dispatch({ type: 'RESTORE_SESSION' });
+          invoke('restore_island_session').catch(() => {
+            invoke('show_island_window').catch(() => {});
+          });
           dispatch({ type: 'TRANSFER_REQUEST', payload: normalized });
         } else if (p.status === 'verifying') {
           dispatch({ type: 'TRANSFER_VERIFYING', payload: normalized });
         } else if (p.status === 'transferring' || p.status === 'sending' || p.status === 'receiving') {
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem('auradrop_island_dismissed');
+            }
+          } catch (_) {}
+          dispatch({ type: 'RESTORE_SESSION' });
+          invoke('restore_island_session').catch(() => {
+            invoke('show_island_window').catch(() => {});
+          });
           if (transferred === 0) {
             dispatch({ type: 'TRANSFER_START', payload: normalized });
           } else {
@@ -377,6 +454,15 @@ export const DesktopIsland: React.FC<{
       listen<any>('incoming-share', (e) => {
         const p = e.payload;
         if (p) {
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem('auradrop_island_dismissed');
+            }
+          } catch (_) {}
+          dispatch({ type: 'RESTORE_SESSION' });
+          invoke('restore_island_session').catch(() => {
+            invoke('show_island_window').catch(() => {});
+          });
           dispatch({
             type: 'TRANSFER_REQUEST',
             payload: {
@@ -405,6 +491,27 @@ export const DesktopIsland: React.FC<{
             text: p.text || '',
             peerId: p.peerId || p.peer_id || p.senderId || '',
           });
+        }
+      })
+    );
+
+    // 6. Listen for host/main window session dismissal sync
+    ul.push(
+      listen<boolean>('island-dismissed-changed', (e) => {
+        if (e.payload) {
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.setItem('auradrop_island_dismissed', 'true');
+            }
+          } catch (_) {}
+          dispatch({ type: 'DISMISS_SESSION' });
+        } else {
+          try {
+            if (typeof window !== 'undefined' && window.sessionStorage) {
+              window.sessionStorage.removeItem('auradrop_island_dismissed');
+            }
+          } catch (_) {}
+          dispatch({ type: 'RESTORE_SESSION' });
         }
       })
     );
@@ -580,6 +687,10 @@ export const DesktopIsland: React.FC<{
     }
   };
 
+  if (state.isDismissed && isOverlayWindow) {
+    return null;
+  }
+
   return (
     <div
       role="status"
@@ -685,6 +796,44 @@ export const DesktopIsland: React.FC<{
               }}
             />
           )}
+
+          {/* Desktop Collapsed Pill Close ('X') Dismiss Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleDismissForSession(e);
+            }}
+            title="Dismiss Dynamic Island for this session"
+            aria-label="Dismiss Dynamic Island"
+            className="island-desktop-close-btn"
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: '50%',
+              background: 'rgba(255, 255, 255, 0.1)',
+              border: 'none',
+              color: '#9CA3AF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 11,
+              lineHeight: 1,
+              cursor: 'pointer',
+              marginLeft: 4,
+              flexShrink: 0,
+              transition: 'all 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(239, 68, 68, 0.3)';
+              e.currentTarget.style.color = '#EF4444';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.1)';
+              e.currentTarget.style.color = '#9CA3AF';
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
@@ -776,37 +925,41 @@ export const DesktopIsland: React.FC<{
               </div>
             </div>
 
-            {/* Right: File Extension Badge or Minimal Collapse Control */}
-            {state.fileName ? (
-              <div
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 12,
-                  background: 'rgba(0, 122, 255, 0.12)',
-                  border: '1px solid rgba(0, 122, 255, 0.3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                  color: '#60A5FA',
-                  fontSize: 11,
-                  fontWeight: 800,
-                  textTransform: 'uppercase',
-                  letterSpacing: 0.5,
-                }}
-              >
-                {state.fileName.split('.').pop()?.slice(0, 4) || 'FILE'}
-              </div>
-            ) : (
+            {/* Right: File Extension Badge AND Desktop Window Controls */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {state.fileName && (
+                <div
+                  style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 10,
+                    background: 'rgba(0, 122, 255, 0.12)',
+                    border: '1px solid rgba(0, 122, 255, 0.3)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    color: '#60A5FA',
+                    fontSize: 11,
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                  }}
+                  title={`File type: ${state.fileName.split('.').pop()?.toUpperCase() || 'FILE'}`}
+                >
+                  {state.fileName.split('.').pop()?.slice(0, 4) || 'FILE'}
+                </div>
+              )}
+
+              {/* Minimal Collapse Control */}
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   dispatch({ type: 'COLLAPSE' });
                 }}
                 style={{
-                  width: 32,
-                  height: 32,
+                  width: 30,
+                  height: 30,
                   borderRadius: '50%',
                   background: 'rgba(255, 255, 255, 0.08)',
                   border: '1px solid rgba(255, 255, 255, 0.12)',
@@ -815,16 +968,64 @@ export const DesktopIsland: React.FC<{
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
-                  fontSize: 13,
+                  fontSize: 14,
                   fontWeight: 600,
                   flexShrink: 0,
                   transition: 'all 0.15s ease',
                 }}
                 title="Collapse Island"
+                aria-label="Collapse Island"
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.2)';
+                  e.currentTarget.style.color = '#FFFFFF';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                  e.currentTarget.style.color = '#A1A1AA';
+                }}
+              >
+                –
+              </button>
+
+              {/* Desktop Close ('X') Dismiss Button */}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDismissForSession(e);
+                }}
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: '50%',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  color: '#A1A1AA',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  flexShrink: 0,
+                  transition: 'all 0.15s ease',
+                }}
+                title="Dismiss Island for session"
+                aria-label="Dismiss Dynamic Island"
+                className="island-card-close-btn"
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = 'rgba(239, 68, 68, 0.25)';
+                  e.currentTarget.style.color = '#EF4444';
+                  e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
+                  e.currentTarget.style.color = '#A1A1AA';
+                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
+                }}
               >
                 ✕
               </button>
-            )}
+            </div>
           </div>
 
           {/* Nearby Discovered Members Section (Live peer cards with instant Share and Chat) */}
